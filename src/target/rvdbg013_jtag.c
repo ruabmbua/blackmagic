@@ -34,11 +34,11 @@
 #define BIT_SIZEOF(x) (sizeof(x) * CHAR_BIT)
 
 enum DTM_REGISTERS {
-					  /* 0x00 is recommended to be IR_BYPASS */
+	// 0x00 is recommended to be IR_BYPASS
 	IR_IDCODE = 0x01,
-	IR_DTMCS  = 0x10, /* DTM control and status              1*/
-	IR_DMI    = 0x11, /* Debug module interface access       1*/
-					  /* 0x12 to 0x17 reserved               1*/
+	IR_DTMCS  = 0x10, /* DTM control and status              */
+	IR_DMI    = 0x11, /* Debug module interface access       */
+	// 0x12 to 0x17 reserved
 	IR_BYPASS = 0x1f,
 };
 
