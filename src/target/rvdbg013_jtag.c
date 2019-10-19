@@ -71,7 +71,22 @@ enum DMI_REG {
 	DMI_REG_CONFSTR_PTR1      = 0x1a,
 	DMI_REG_CONFSTR_PTR2      = 0x1b,
 	DMI_REG_CONFSTR_PTR3      = 0x1c,
-	DMI_REG_NEXTDM_ADDR       = 0x1d, 
+	DMI_REG_NEXTDM_ADDR       = 0x1d,
+	DMI_REG_PROGRAMBUF_BEGIN  = 0x20,
+	DMI_REG_PROGRAMBUF_END    = 0x2f,
+	DMI_REG_AUTHDATA		  = 0x30,
+	DMI_REG_HALTSUM2          = 0x34,
+	DMI_REG_HALTSUM3 		  = 0x35,
+	DMI_REG_SBADDRESS3		  = 0x37,
+	DMI_REG_SYSBUSCS          = 0x38,
+	DMI_REG_SBADDRESS0		  = 0x39,
+	DMI_REG_SBADDRESS1		  = 0x3a,
+	DMI_REG_SBADDRESS2		  = 0x3b,
+	DMI_REG_SBDATA0			  = 0x3c,
+	DMI_REG_SBDATA1			  = 0x3d,
+	DMI_REG_SBDATA2			  = 0x3e,
+	DMI_REG_SBDATA3			  = 0x3f,
+	DMI_REG_HALTSUM0	 	  = 0x40,
 };
 
 #define DMI_BASE_BIT_COUNT   34
@@ -84,6 +99,8 @@ enum DMI_REG {
 #define DTMCS_GET_IDLE(x)    ((x>>12) & 0x7)
 
 #define DMI_GET_OP(x)        (x & 0x3)
+
+#define DMSTATUS_GET_VERSION(x) DTMCS_GET_VERSION(x)
 
 static int rvdbg_jtag_init(RVDBGv013_DP_t *dp);
 
@@ -132,7 +149,7 @@ retry:
 			jtag_dev_write_ir(dp->dev, IR_DMI);
 			jtag_dev_shift_dr(dp->dev, (void*)&dmi_ret, (const void*)&dp->last_dmi, DMI_BASE_BIT_COUNT + dp->abits);
 
-			DEBUG("in %"PRIx64"\n", dmi_ret);
+			DEBUG("in 0x%"PRIx64"\n", dmi_ret);
 
 			if (dp->idle >= 2)
 				jtagtap_tms_seq(0, dp->idle - 1);
@@ -171,22 +188,8 @@ static int rvdbg_dmi_read(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t *data)
 	return rvdbg_dmi_low_access(dp, data, DMI_OP_NOP);
 }
 
-static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
+static int rvdbg_set_debug_version(RVDBGv013_DP_t *dp, uint8_t version)
 {
-	uint64_t dtmcontrol; /* uint64_t due to https://github.com/blacksphere/blackmagic/issues/542 */
-	uint8_t version;
-
-	DEBUG("RISC-V DTM id 0x%x detected: `%s`\n"
-		"Scanning RISC-V target ...\n", dp->idcode, dp->dev->descr);
-
-	// Read from the DTM control and status register
-	jtag_dev_write_ir(dp->dev, IR_DTMCS);
-	jtag_dev_shift_dr(dp->dev, (void*)&dtmcontrol,
-		(void*)&dtmcontrol, 32);
-		
-	DEBUG("  dtmcs: 0x%08x\n", (uint32_t)dtmcontrol);
-
-	version = DTMCS_GET_VERSION((uint32_t)dtmcontrol);
 	switch (version) {
 		case RISCV_DEBUG_VERSION_011:
 			DEBUG("Warning: RISC-V target might not be fully supported\n");
@@ -199,12 +202,36 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 			DEBUG("RISC-V target unknown debug spec verson: %d\n", version);
 			return -1;
 	}
+
+	return 0;
+}
+
+static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
+{
+	uint64_t dtmcontrol; /* uint64_t due to https://github.com/blacksphere/blackmagic/issues/542 */
+	uint8_t version;
+	uint32_t dmstatus;
+
+	DEBUG("RISC-V DTM id 0x%x detected: `%s`\n"
+		"Scanning RISC-V target ...\n", dp->idcode, dp->dev->descr);
+
+	// Read from the DTM control and status register
+	jtag_dev_write_ir(dp->dev, IR_DTMCS);
+	jtag_dev_shift_dr(dp->dev, (void*)&dtmcontrol,
+		(void*)&dtmcontrol, 32);
+		
+	DEBUG("  dtmcs: 0x%08x\n", (uint32_t)dtmcontrol);
+
+	version = DTMCS_GET_VERSION((uint32_t)dtmcontrol);
+	if (rvdbg_set_debug_version(dp, version) < 0)
+		return -1;
 	
 	dp->idle = DTMCS_GET_IDLE(dtmcontrol);
 	dp->abits = DTMCS_GET_ABITS(dtmcontrol);
 
 	DEBUG("  version: %d\n  abits: %d\n  dmistat: %d\n  idle: ",
 		dp->debug_version, dp->abits, DTMCS_GET_DMISTAT((uint32_t)dtmcontrol));
+
 	switch (dp->idle) {
 		case 0:
 			DEBUG("no run/test state\n");
@@ -217,16 +244,27 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 			break;
 	}
 
-	rvdbg_dmi_reset(dp, false);
+	rvdbg_dmi_reset(dp, true);
 
 	// Switch to DMI register
 	jtag_dev_write_ir(dp->dev, IR_DMI);
 
-	uint32_t dmstatus;
-	if (rvdbg_dmi_read(dp, 0x11, &dmstatus) < 0)
+	if (rvdbg_dmi_read(dp, DMI_REG_DMSTATUS, &dmstatus) < 0)
 		return -1;
 
 	DEBUG("dmstatus = 0x%08x\n", dmstatus);
+
+	version = DMSTATUS_GET_VERSION(dmstatus);
+	if (version == 0) {
+		DEBUG("No debug module present\n");
+	} else if ((uint8_t)(version - 1) != dp->debug_version) {
+		DEBUG("dtmcs and dmstatus debug version mismatch\n");
+		// Trust the dmstatus register. Ignore error, and leave
+		// previous version active
+		// ----------------------------------------------------
+		if (version != (uint8_t)RISCV_DEBUG_VERSION_UNKNOWN)
+			rvdbg_set_debug_version(dp, version);
+	}
 
 	return 0;
 }
