@@ -49,12 +49,41 @@ enum DMISTAT {
 	DMISTAT_OP_INTERRUPTED = 3,
 };
 
+enum DMI_OP {
+	DMI_OP_NOP   = 0,
+	DMI_OP_READ  = 1,
+	DMI_OP_WRITE = 2,
+};
+
+enum DMI_REG {
+	DMI_REG_ABSTRACT_DATA0    = 0x04,
+	DMI_REG_ABSTRACT_DATA11   = 0x0f,
+	DMI_REG_DMCONTROL         = 0x10,
+	DMI_REG_DMSTATUS          = 0x11,
+	DMI_REG_HARTINFO          = 0x12,
+	DMI_REG_HALTSUM1          = 0x13,
+	DMI_REG_HAWINDOWSEL       = 0x14,
+	DMI_REG_HAWINDOW          = 0x15,
+	DMI_REG_ABSTRACT_CS       = 0x16,
+	DMI_REG_ABSTRACT_CMD      = 0x17,
+	DMI_REG_ABSTRACT_AUTOEXEC = 0x18,
+	DMI_REG_CONFSTR_PTR0      = 0x19,
+	DMI_REG_CONFSTR_PTR1      = 0x1a,
+	DMI_REG_CONFSTR_PTR2      = 0x1b,
+	DMI_REG_CONFSTR_PTR3      = 0x1c,
+	DMI_REG_NEXTDM_ADDR       = 0x1d, 
+};
+
+#define DMI_BASE_BIT_COUNT   34
+
 #define DTMCS_DMIRESET       0x10000
 #define DTMCS_DMIHARDRESET   0x20000
 #define DTMCS_GET_VERSION(x) (x & 0xf)
 #define DTMCS_GET_ABITS(x)   ((x>>4) & 0x3f)
 #define DTMCS_GET_DMISTAT(x) ((x>>10) & 0x3)
 #define DTMCS_GET_IDLE(x)    ((x>>12) & 0x7)
+
+#define DMI_GET_OP(x)        (x & 0x3)
 
 static int rvdbg_jtag_init(RVDBGv013_DP_t *dp);
 
@@ -87,6 +116,59 @@ static void rvdbg_dmi_reset(RVDBGv013_DP_t *dp, bool hard_reset)
 	jtag_dev_shift_dr(dp->dev, (void*)&dtmcontrol, (void*)&dtmcontrol, 32);
 
 	DEBUG("after dmireset: dtmcs = 0x%08x\n", (uint32_t)dtmcontrol);
+}
+
+static int rvdbg_dmi_low_access(RVDBGv013_DP_t *dp, uint32_t *dmi_data_out, uint64_t dmi_cmd)
+{
+	uint64_t dmi_ret;
+
+retry:
+	jtag_dev_shift_dr(dp->dev, (void*)&dmi_ret, (const void*)&dmi_cmd, DMI_BASE_BIT_COUNT + dp->abits);
+
+	switch (DMI_GET_OP(dmi_ret)) {
+		case DMISTAT_OP_INTERRUPTED:
+			// Retry after idling, restore last dmi
+			rvdbg_dmi_reset(dp, false);
+			jtag_dev_write_ir(dp->dev, IR_DMI);
+			jtag_dev_shift_dr(dp->dev, (void*)&dmi_ret, (const void*)&dp->last_dmi, DMI_BASE_BIT_COUNT + dp->abits);
+
+			DEBUG("in %"PRIx64"\n", dmi_ret);
+
+			if (dp->idle >= 2)
+				jtagtap_tms_seq(0, dp->idle - 1);
+			goto retry;
+
+		case DMISTAT_NO_ERROR:
+			dp->last_dmi = dmi_cmd;
+			break;
+
+		case DMISTAT_RESERVED:
+		case DMISTAT_OP_FAILED:
+		default:
+			DEBUG("DMI returned error: %"PRIx64"\n", dmi_ret);
+			jtag_dev_write_ir(dp->dev, IR_DMI);
+			rvdbg_dmi_reset(dp, false);
+			// TODO: Support recovering?
+			return -1;
+	}
+
+	if (dmi_data_out != NULL)
+		*dmi_data_out = (dmi_ret >> 2);
+
+	return 0;
+}
+
+// static int rvdbg_dmi_write(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t data)
+// {
+// 	return rvdbg_dmi_low_access(dp, NULL, ((uint64_t)addr << DMI_BASE_BIT_COUNT) | (data << 2) | DMI_OP_WRITE);
+// }
+
+static int rvdbg_dmi_read(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t *data)
+{
+	if (rvdbg_dmi_low_access(dp, NULL, ((uint64_t)addr << DMI_BASE_BIT_COUNT) | DMI_OP_READ) < 0)
+		return -1;
+
+	return rvdbg_dmi_low_access(dp, data, DMI_OP_NOP);
 }
 
 static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
@@ -139,6 +221,12 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 
 	// Switch to DMI register
 	jtag_dev_write_ir(dp->dev, IR_DMI);
+
+	uint32_t dmstatus;
+	if (rvdbg_dmi_read(dp, 0x11, &dmstatus) < 0)
+		return -1;
+
+	DEBUG("dmstatus = 0x%08x\n", dmstatus);
 
 	return 0;
 }

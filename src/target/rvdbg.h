@@ -37,6 +37,8 @@ typedef struct RVDBGv013_DP_s {
     uint8_t idle;
     uint8_t abits;
 
+    uint64_t last_dmi;
+
     // uint32_t (*dp_read)(struct RVDBGv013_DP_s *dp, uint16_t addr);
     // uint32_t (*error)(struct RVDBGv013_DP_s *dp);
 
