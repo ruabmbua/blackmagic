@@ -45,6 +45,7 @@ SRC =			\
 	nrf51.c		\
 	nxpke04.c	\
 	platform.c	\
+	rvdbg013_jtag.c \
 	sam3x.c		\
 	sam4l.c		\
 	samd.c		\
