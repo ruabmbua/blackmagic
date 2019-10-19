@@ -281,7 +281,7 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 {
 	uint64_t dtmcontrol; /* uint64_t due to https://github.com/blacksphere/blackmagic/issues/542 */
 	uint8_t version;
-	uint32_t dmstatus;
+	uint32_t dmstatus, nextdmaddr;
 
 	DEBUG("RISC-V DTM id 0x%x detected: `%s`\n"
 		"Scanning RISC-V target ...\n", dp->idcode, dp->dev->descr);
@@ -335,6 +335,14 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 		// ----------------------------------------------------
 		if (version != (uint8_t)RISCV_DEBUG_VERSION_UNKNOWN)
 			rvdbg_set_debug_version(dp, version);
+	}
+
+	if (rvdbg_dmi_read(dp, DMI_REG_NEXTDM_ADDR, &nextdmaddr) < 0)
+		return -1;
+
+	if (nextdmaddr) {
+		// Multiple DM per DMI not yet supported
+		DEBUG("Warning: Detected multiple RISC-V debug modules, only one supported!\n");
 	}
 
 	if (rvdbg_discover_harts(dp) < 0)
