@@ -32,6 +32,7 @@
 #include "rvdbg.h"
 
 #define BIT_SIZEOF(x) (sizeof(x) * CHAR_BIT)
+#define ARRAY_NUMELEM(x) (sizeof(x) / sizeof(x[0]))
 
 enum DTM_REGISTERS {
 	// 0x00 is recommended to be IR_BYPASS
@@ -89,18 +90,29 @@ enum DMI_REG {
 	DMI_REG_HALTSUM0	 	  = 0x40,
 };
 
-#define DMI_BASE_BIT_COUNT   34
+#define DMI_BASE_BIT_COUNT   		 34
 
-#define DTMCS_DMIRESET       0x10000
-#define DTMCS_DMIHARDRESET   0x20000
-#define DTMCS_GET_VERSION(x) (x & 0xf)
-#define DTMCS_GET_ABITS(x)   ((x>>4) & 0x3f)
-#define DTMCS_GET_DMISTAT(x) ((x>>10) & 0x3)
-#define DTMCS_GET_IDLE(x)    ((x>>12) & 0x7)
+#define DTMCS_DMIRESET               0x10000
+#define DTMCS_DMIHARDRESET           0x20000
+#define DTMCS_GET_VERSION(x)         (x & 0xf)
+#define DTMCS_GET_ABITS(x)           ((x>>4) & 0x3f)
+#define DTMCS_GET_DMISTAT(x)         ((x>>10) & 0x3)
+#define DTMCS_GET_IDLE(x)            ((x>>12) & 0x7)
 
-#define DMI_GET_OP(x)        (x & 0x3)
+#define DMI_GET_OP(x)                (x & 0x3)
 
-#define DMSTATUS_GET_VERSION(x) DTMCS_GET_VERSION(x)
+#define DMSTATUS_GET_VERSION(x)         DTMCS_GET_VERSION(x)
+#define DMSTATUS_GET_CONFSTRPTRVALID(x) ((x >> 4) & 0x1)
+#define DMSTATUS_GET_HASRESETHALTREQ(x) ((x >> 5) & 0x1)
+#define DMSTATUS_GET_AUTHBUSY(x)		((x >> 6) & 0x1)
+#define DMSTATUS_GET_AUTHENTICATED(x)   ((x >> 7) & 0x1)
+#define DMSTATUS_GET_ANYNONEXISTENT(x)  ((x >> 14) & 0x1)
+
+#define DMCONTROL_GET_HARTSEL(x)     (((x >> 16) & 0x3ff) | (((x >> 6) & 0x3ff) << 10))
+#define DMCONTROL_SET_HARTSEL(t, s)  do { \
+	t &= ~(0xfffff << 6); \
+	t |= (s & 0x3ff) << 16; \
+	t |= (s & (0x3ff << 10) >> 4); } while(0)
 
 static int rvdbg_jtag_init(RVDBGv013_DP_t *dp);
 
@@ -175,10 +187,10 @@ retry:
 	return 0;
 }
 
-// static int rvdbg_dmi_write(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t data)
-// {
-// 	return rvdbg_dmi_low_access(dp, NULL, ((uint64_t)addr << DMI_BASE_BIT_COUNT) | (data << 2) | DMI_OP_WRITE);
-// }
+static int rvdbg_dmi_write(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t data)
+{
+	return rvdbg_dmi_low_access(dp, NULL, ((uint64_t)addr << DMI_BASE_BIT_COUNT) | (data << 2) | DMI_OP_WRITE);
+}
 
 static int rvdbg_dmi_read(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t *data)
 {
@@ -191,17 +203,76 @@ static int rvdbg_dmi_read(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t *data)
 static int rvdbg_set_debug_version(RVDBGv013_DP_t *dp, uint8_t version)
 {
 	switch (version) {
-		case RISCV_DEBUG_VERSION_011:
-			DEBUG("Warning: RISC-V target might not be fully supported\n");
-			/* FALLTHROUGH */
 		case RISCV_DEBUG_VERSION_013:
 			dp->debug_version = version;
 			break;
+		case RISCV_DEBUG_VERSION_011:
+			DEBUG("Error: RISC-V debug 0.11 not supported\n");
+			return -1;
 		case RISCV_DEBUG_VERSION_UNKNOWN:
 		default:
 			DEBUG("RISC-V target unknown debug spec verson: %d\n", version);
 			return -1;
 	}
+
+	return 0;
+}
+
+#ifdef ENABLE_DEBUG
+static const char* rvdbg_version_tostr(enum RISCV_DEBUG_VERSION version)
+{
+	switch (version) {
+		case RISCV_DEBUG_VERSION_011:
+			return "0.11";
+		case RISCV_DEBUG_VERSION_013:
+			return "0.13";
+		case RISCV_DEBUG_VERSION_UNKNOWN:
+		default:
+			return "UNKNOWN";
+	}
+}
+#endif /* ENABLE_DEBUG */
+
+static int rvdbg_discover_harts(RVDBGv013_DP_t *dp)
+{
+	uint32_t dmcontrol = 0;
+	uint32_t hart_idx, hartsellen, dmstatus;
+
+	// Set all 20 bits of hartsel
+	DMCONTROL_SET_HARTSEL(dmcontrol, 0xfffff);
+	if (rvdbg_dmi_write(dp, DMI_REG_DMCONTROL, dmcontrol) < 0)
+		return -1;
+
+	if (rvdbg_dmi_read(dp, DMI_REG_DMCONTROL, &dmcontrol) < 0)
+		return -1;
+
+	hartsellen = DMCONTROL_GET_HARTSEL(dmcontrol);
+
+	DEBUG("hartsellen = 0x%05x\n", hartsellen);
+	
+	// Iterate over all possible harts
+	for (hart_idx = 0; hart_idx <= hartsellen 
+			&& dp->num_harts < ARRAY_NUMELEM(dp->harts); hart_idx++) {
+		dmcontrol = 0;
+		DMCONTROL_SET_HARTSEL(dmcontrol, hart_idx);
+		
+		if (rvdbg_dmi_write(dp, DMI_REG_DMCONTROL, dmcontrol) < 0)
+			return -1;
+		
+		// Check if anynonexist is true -> abort
+		if (rvdbg_dmi_read(dp, DMI_REG_DMSTATUS, &dmstatus) < 0)
+			return -1;
+
+		if (DMSTATUS_GET_ANYNONEXISTENT(dmstatus)) {
+			DEBUG("Hart idx 0x%05x does not exist\n", hart_idx);
+			break;
+		}
+
+		// TODO: Add the hart
+		dp->num_harts++;
+	}
+
+	DEBUG("num_harts = %d\n", dp->num_harts);
 
 	return 0;
 }
@@ -220,7 +291,7 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 	jtag_dev_shift_dr(dp->dev, (void*)&dtmcontrol,
 		(void*)&dtmcontrol, 32);
 		
-	DEBUG("  dtmcs: 0x%08x\n", (uint32_t)dtmcontrol);
+	DEBUG("  dtmcs = 0x%08x\n", (uint32_t)dtmcontrol);
 
 	version = DTMCS_GET_VERSION((uint32_t)dtmcontrol);
 	if (rvdbg_set_debug_version(dp, version) < 0)
@@ -229,8 +300,8 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 	dp->idle = DTMCS_GET_IDLE(dtmcontrol);
 	dp->abits = DTMCS_GET_ABITS(dtmcontrol);
 
-	DEBUG("  version: %d\n  abits: %d\n  dmistat: %d\n  idle: ",
-		dp->debug_version, dp->abits, DTMCS_GET_DMISTAT((uint32_t)dtmcontrol));
+	DEBUG("  debug version = %s\n  abits = %d\n  dmistat = %d\n  idle = ",
+		rvdbg_version_tostr(dp->debug_version), dp->abits, DTMCS_GET_DMISTAT((uint32_t)dtmcontrol));
 
 	switch (dp->idle) {
 		case 0:
@@ -265,6 +336,9 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 		if (version != (uint8_t)RISCV_DEBUG_VERSION_UNKNOWN)
 			rvdbg_set_debug_version(dp, version);
 	}
+
+	if (rvdbg_discover_harts(dp) < 0)
+		return -1;
 
 	return 0;
 }

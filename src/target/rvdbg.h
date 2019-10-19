@@ -29,6 +29,11 @@ enum RISCV_DEBUG_VERSION {
 	RISCV_DEBUG_VERSION_UNKNOWN = 15,
 };
 
+typedef struct HART_s {
+    uint8_t idx;
+    uint8_t mhartid;
+} HART_t;
+
 typedef struct RVDBGv013_DP_s {
     int refcnt;
 
@@ -36,6 +41,8 @@ typedef struct RVDBGv013_DP_s {
     enum RISCV_DEBUG_VERSION debug_version;
     uint8_t idle;
     uint8_t abits;
+    HART_t harts[4];
+    uint8_t num_harts;
 
     uint64_t last_dmi;
 
