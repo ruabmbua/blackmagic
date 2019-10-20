@@ -30,6 +30,7 @@
 #include "jtagtap.h"
 #include "morse.h"
 #include "rvdbg.h"
+#include "rv32i_isa.h"
 
 #define BIT_SIZEOF(x) (sizeof(x) * CHAR_BIT)
 #define ARRAY_NUMELEM(x) (sizeof(x) / sizeof(x[0]))
@@ -121,10 +122,12 @@ enum AUTOEXEC_STATE {
 };
 
 enum HART_REG {
-	HART_REG_CSR_BEGIN = 0x0000,
-	HART_REG_CSR_END   = 0x0fff,
-	HART_REG_GPR_BEGIN = 0x1000,
-	HART_REG_GPR_END   = 0x101f,
+	HART_REG_CSR_BEGIN   = 0x0000,
+	HART_REG_CSR_MISA    = 0x0301,
+	HART_REG_CSR_MHARTID = 0x0f14,
+	HART_REG_CSR_END     = 0x0fff,
+	HART_REG_GPR_BEGIN   = 0x1000,
+	HART_REG_GPR_END     = 0x101f,
 };
 
 #define DMI_BASE_BIT_COUNT   		 34
@@ -345,12 +348,18 @@ static int rvdbg_discover_harts(RVDBGv013_DP_t *dp)
 		}
 
 		// TODO: Add the hart
+		// dp->harts[hart_idx].mhartid = ;
+
 		dp->num_harts++;
 	}
 
 	DEBUG("num_harts = %d\n", dp->num_harts);
 
 	// Select hart0 as current
+	dmcontrol = 0;
+	DMCONTROL_SET_HARTSEL(dmcontrol, hart_idx);
+	if (rvdbg_dmi_write(dp, DMI_REG_DMCONTROL, dmcontrol) < 0)
+		return -1;
 	dp->current_hart = &dp->harts[0];
 
 	return 0;
@@ -573,6 +582,11 @@ static int rvdbg_read_regs(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t *values
 static int rvdbg_progbuf_upload(RVDBGv013_DP_t *dp, const uint32_t* buffer, uint8_t buffer_len)
 {
 	uint8_t i;
+
+	if (buffer_len > dp->progbuf_size + dp->impebreak ? 1 : 0) {
+		DEBUG("RISC-V: progbuf upload size %d too big\n", buffer_len);
+		return -1;
+	}
 
 	for (i = DMI_REG_PROGRAMBUF_BEGIN; i < buffer_len; i++) {
 		if (rvdbg_dmi_write(dp, DMI_REG_PROGRAMBUF_BEGIN + i, buffer[i]) < 0)
