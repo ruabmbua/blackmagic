@@ -592,6 +592,8 @@ static int rvdbg_progbuf_upload(RVDBGv013_DP_t *dp, const uint32_t* buffer, uint
 		if (rvdbg_dmi_write(dp, DMI_REG_PROGRAMBUF_BEGIN + i, buffer[i]) < 0)
 			return -1;
 	}
+
+	return 0;
 }
 
 // TODO: Backup and restore registers externally for performance opt
@@ -599,16 +601,26 @@ static int rvdbg_progbuf_exec(RVDBGv013_DP_t *dp, uint32_t *args, uint8_t argin_
 	uint8_t argout_len)
 {
 	int ret;
+	uint8_t backup_len;
 	uint32_t command = 0;
+	ABSTRACTCMD_SET_TYPE(command, ABSTRACTCMD_TYPE_ACCESS_REGISTER);
 	ABSTRACTCMD_ACCESS_REGISTER_SET_POSTEXEC(command, 1);
 
+	// How many registers have to be backed up?
+	backup_len = MAX(argin_len, argout_len);
+
+	if (backup_len > 31) {
+		DEBUG("RISC-V: Too many requested argument registers\n");
+		return -1;
+	}
+
 	// Backup argument registers
-	if (rvdbg_read_regs(dp, HART_REG_GPR_BEGIN, dp->current_hart->gp_register_backup,
-			argin_len) < 0)
+	if (rvdbg_read_regs(dp, HART_REG_GPR_BEGIN + 1, dp->current_hart->gp_register_backup,
+			backup_len) < 0)
 		return -1;
 
-	// Write all arguments to GPRs
-	if (rvdbg_write_regs(dp, HART_REG_GPR_BEGIN, args, argin_len) < 0)
+	// Write all in arguments to GPRs
+	if (rvdbg_write_regs(dp, HART_REG_GPR_BEGIN + 1, args, argin_len) < 0)
 		return -1;
 
 	// Start command
@@ -626,20 +638,34 @@ static int rvdbg_progbuf_exec(RVDBGv013_DP_t *dp, uint32_t *args, uint8_t argin_
 	}
 
 	// Copy result
-	if (rvdbg_read_regs(dp, HART_REG_GPR_BEGIN, args, argout_len) < 0)
+	if (rvdbg_read_regs(dp, HART_REG_GPR_BEGIN + 1, args, argout_len) < 0)
 		return -1;
 
 	// Restore backup regs
-	if (rvdbg_write_regs(dp, HART_REG_GPR_BEGIN, dp->current_hart->gp_register_backup,
-			argin_len) < 0)
+	if (rvdbg_write_regs(dp, HART_REG_GPR_BEGIN + 1, dp->current_hart->gp_register_backup,
+			backup_len) < 0)
 		return -1;
 
 	return 0;
 }
 
-// static void rvdbg_read_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t* value) { }
+static int rvdbg_read_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t* value) {
+	// Store result in x1
+	uint32_t program[] = {
+		RV32I_ISA_CSRRS(1, reg_id, 0)
+	};
 
-// static void rvdbg_write_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t value) { }
+	if (rvdbg_progbuf_upload(dp, program, ARRAY_NUMELEM(program)) < 0)
+		return -1;
+
+	// exec with 0 in registers and 1 out register, this reserves x1 as an output register
+	if (rvdbg_progbuf_exec(dp, value, 0, 1) < 0)
+		return -1;
+
+	return 0;
+}
+
+// static int rvdbg_write_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t value) { }
 
 // static void rvdbg_read_mem_progbuf(RVDBGv013_DP_t *dp, uint32_t address, uint32_t* value) { }
 
@@ -680,7 +706,7 @@ static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DP_t *dp)
 		// PROGBUF supported
 		DEBUG("RISC-V: Program buffer with size %d supported.\n", dp->progbuf_size);
 
-		// dp->read_csr = rvdbg_read_csr_progbuf;
+		dp->read_csr = rvdbg_read_csr_progbuf;
 		// dp->write_csr = rvdbg_write_csr_progbuf;
 		// dp->read_mem = rvdbg_read_mem_progbuf;
 		// dp->write_mem = rvdbg_write_mem_progbuf;
