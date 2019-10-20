@@ -120,6 +120,13 @@ enum AUTOEXEC_STATE {
 	AUTOEXEC_STATE_CONT, /* Only access data0 register */
 };
 
+enum HART_REG {
+	HART_REG_CSR_BEGIN = 0x0000,
+	HART_REG_CSR_END   = 0x0fff,
+	HART_REG_GPR_BEGIN = 0x1000,
+	HART_REG_GPR_END   = 0x101f,
+};
+
 #define DMI_BASE_BIT_COUNT   		 34
 
 #define DTMCS_DMIRESET               0x10000
@@ -343,6 +350,9 @@ static int rvdbg_discover_harts(RVDBGv013_DP_t *dp)
 
 	DEBUG("num_harts = %d\n", dp->num_harts);
 
+	// Select hart0 as current
+	dp->current_hart = &dp->harts[0];
+
 	return 0;
 }
 
@@ -377,6 +387,8 @@ retry:
 		if (cmderror == ABSTRACTCMD_ERR_BUSY) {
 			DEBUG("RISC-V abstract command busy, retry...\n");
 			goto retry;
+		} else if (cmderror == ABSTRACTCMD_ERR_HALT_RESUME) {
+			DEBUG("RISC-V abstract command 0x%08x not supported in run/halt state\n", command);
 		}
 	}
 
@@ -568,11 +580,48 @@ static int rvdbg_progbuf_upload(RVDBGv013_DP_t *dp, const uint32_t* buffer, uint
 	}
 }
 
-// static void rvdbg_progbuf_exec(RVDBGv013_DP_t *dp, uint32_t *args, uint8_t arglen)
-// {
-// 	// Backup argument registers
+// TODO: Backup and restore registers externally for performance opt
+static int rvdbg_progbuf_exec(RVDBGv013_DP_t *dp, uint32_t *args, uint8_t argin_len,
+	uint8_t argout_len)
+{
+	int ret;
+	uint32_t command = 0;
+	ABSTRACTCMD_ACCESS_REGISTER_SET_POSTEXEC(command, 1);
 
-// }
+	// Backup argument registers
+	if (rvdbg_read_regs(dp, HART_REG_GPR_BEGIN, dp->current_hart->gp_register_backup,
+			argin_len) < 0)
+		return -1;
+
+	// Write all arguments to GPRs
+	if (rvdbg_write_regs(dp, HART_REG_GPR_BEGIN, args, argin_len) < 0)
+		return -1;
+
+	// Start command
+	if ((ret = rvdbg_abstract_command_run(dp, command)) < 0)
+		return -1;
+
+	// Handle cmderror
+	switch (ret) {
+		case ABSTRACTCMD_ERR_EXCEPTION:
+			DEBUG("RISC-V: Exception in progbuf execution\n");
+			return -1;	
+		default:
+			DEBUG("RISC-V: Failed to execute progbuf, error %d\n", ret);
+			return -1;
+	}
+
+	// Copy result
+	if (rvdbg_read_regs(dp, HART_REG_GPR_BEGIN, args, argout_len) < 0)
+		return -1;
+
+	// Restore backup regs
+	if (rvdbg_write_regs(dp, HART_REG_GPR_BEGIN, dp->current_hart->gp_register_backup,
+			argin_len) < 0)
+		return -1;
+
+	return 0;
+}
 
 // static void rvdbg_read_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t* value) { }
 
