@@ -46,15 +46,16 @@ typedef struct RVDBGv013_DP_s {
     uint8_t progbuf_size;
     bool impebreak;
     uint8_t abstract_data_count;
+    bool support_autoexecdata;
 
     HART_t harts[RVDBG_MAX_HARTS];
     uint8_t num_harts;
 
     uint64_t last_dmi;
 
-    // Back up registers for progbuf communication
-    uint32_t x1_backup;
-    uint32_t x2_backup;
+    // Back up registers for progbuf communication (excludes x0)
+    // TODO: Do not assume XLEN 32
+    uint32_t gp_register_backup[31];
 
     void (*read_csr)(struct RVDBGv013_DP_s *dp, uint16_t reg_id, uint32_t *value);
     void (*write_csr)(struct RVDBGv013_DP_s *dp, uint16_t reg_id, uint32_t value);

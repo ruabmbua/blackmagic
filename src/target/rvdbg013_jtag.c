@@ -114,6 +114,12 @@ enum ABSTRACTCMD_ERR {
 	ABSTRACTCMD_ERR_OTHER = 0x7,
 };
 
+enum AUTOEXEC_STATE {
+	AUTOEXEC_STATE_NONE, /* Ingnore autoexec */
+	AUTOEXEC_STATE_INIT, /* Setup everything + AARAUTOINC */
+	AUTOEXEC_STATE_CONT, /* Only access data0 register */
+};
+
 #define DMI_BASE_BIT_COUNT   		 34
 
 #define DTMCS_DMIRESET               0x10000
@@ -160,14 +166,18 @@ enum ABSTRACTCMD_ERR {
 #define ABSTRACTCMD_ACCESS_REGISTER_SET_TRANSFER(t, s) do { \
 	t &= ~(0x1 << 17); \
 	t |= (s & 0x1) << 17; } while (0)
-#define ABSTRACTCMD_ACCESS_REGISTER_SET_WRITE(t, s) do { \
+#define ABSTRACTCMD_ACCESS_REGISTER_SET_WRITE(t, s)    do { \
 	t &= ~(0x1 << 16); \
 	t |= (s & 0x1) << 16; } while (0)
-#define ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(t, s) do { \
+#define ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(t, s)    do { \
 	t &= ~(0xffff); \
 	t |= s & 0xffff; } while (0)
 
-
+#define ABSTRACTAUTO_SOME_PATTEN		(0b101010101010)
+#define ABSTRACTAUTO_GET_DATA(x)        (x & 0xfff)
+#define ABSTRACTAUTO_SET_DATA(t, s)     do { \
+	t &= ~(0xfff); \
+	t |= s & 0xfff; } while (0)
 
 static int rvdbg_jtag_init(RVDBGv013_DP_t *dp);
 
@@ -373,9 +383,11 @@ retry:
 	return cmderror;
 }
 
-static int rvdbg_read_gpr(RVDBGv013_DP_t *dp, uint16_t gpr, uint32_t *out)
+static int rvdbg_read_single_reg(RVDBGv013_DP_t *dp, uint16_t reg_idx, uint32_t *out,
+	enum AUTOEXEC_STATE astate)
 {
 	uint32_t command = 0;
+	uint32_t abstractcs;
 	int ret;
 
 	// Construct abstract command
@@ -383,34 +395,49 @@ static int rvdbg_read_gpr(RVDBGv013_DP_t *dp, uint16_t gpr, uint32_t *out)
 	ABSTRACTCMD_SET_TYPE(command, ABSTRACTCMD_TYPE_ACCESS_REGISTER);
 	ABSTRACTCMD_ACCESS_REGISTER_SET_AARSIZE(command, BUS_ACCESS_32);
 	ABSTRACTCMD_ACCESS_REGISTER_SET_TRANSFER(command, 1);
-	ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(command, gpr);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(command, reg_idx);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_AARPOSTINCREMENT(command,
+		astate == AUTOEXEC_STATE_INIT ? 1 : 0);
 
-	// Initiate register read command
-	if ((ret = rvdbg_abstract_command_run(dp, command)) < 0)
-		return -1;
-
-	// Handle error
-	switch (ret) {
-		case ABSTRACTCMD_ERR_NONE:
-			break;
-		case ABSTRACTCMD_ERR_EXCEPTION:
-			// TODO: This check becomes invalid as soon as postexec is set.
-			DEBUG("RISC-V register 0x%"PRIx16"\n does not exist", gpr);
+	// Avoid wrinting command, when in autoexec cont mode
+	if (astate != AUTOEXEC_STATE_CONT) {
+		// Initiate register read command
+		if ((ret = rvdbg_abstract_command_run(dp, command)) < 0)
 			return -1;
-		default:
-			DEBUG("RISC-V abstract command error: %d\n", ret);
-			return -1;
+	
+		// Handle error
+		switch (ret) {
+			case ABSTRACTCMD_ERR_NONE:
+				break;
+			case ABSTRACTCMD_ERR_EXCEPTION:
+				// TODO: This check becomes invalid as soon as postexec is set.
+				DEBUG("RISC-V register 0x%"PRIx16"\n does not exist", reg_idx);
+				return -1;
+			default:
+				DEBUG("RISC-V abstract command error: %d\n", ret);
+				return -1;
+		}
 	}
 
 	if (rvdbg_dmi_read(dp, DMI_REG_ABSTRACTDATA_BEGIN, out) < 0)
 		return -1;
 
+	if (astate == AUTOEXEC_STATE_CONT) {
+		// In cont mode, only read when not busy (not guarded by rvdbg_abstract_command_run)
+		do {
+			if (rvdbg_dmi_read(dp, DMI_REG_ABSTRACT_CS, &abstractcs) < 0)
+				return -1;
+		} while (ABSTRACTCS_GET_BUSY(abstractcs));
+	}
+
 	return 0;
 }
 
-static int rvdbg_write_gpr(RVDBGv013_DP_t *dp, uint16_t gpr, uint32_t value)
+static int rvdbg_write_single_reg(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t value,
+	enum AUTOEXEC_STATE astate)
 {
 	uint32_t command = 0;
+	uint32_t abstractcs;
 	int ret;
 
 	// Write value to data0
@@ -423,26 +450,112 @@ static int rvdbg_write_gpr(RVDBGv013_DP_t *dp, uint16_t gpr, uint32_t value)
 	ABSTRACTCMD_ACCESS_REGISTER_SET_AARSIZE(command, BUS_ACCESS_32);
 	ABSTRACTCMD_ACCESS_REGISTER_SET_TRANSFER(command, 1);
 	ABSTRACTCMD_ACCESS_REGISTER_SET_WRITE(command, 1);
-	ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(command, gpr);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(command, reg_id);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_AARPOSTINCREMENT(command, 
+		astate == AUTOEXEC_STATE_INIT ? 1 : 0);
 
-	// Initiate register write command
-	if ((ret = rvdbg_abstract_command_run(dp, command)) < 0)
-		return -1;
-
-	// Handle error
-	switch (ret) {
-		case ABSTRACTCMD_ERR_NONE:
-			break;
-		case ABSTRACTCMD_ERR_EXCEPTION:
-			// TODO: This check becomes invalid as soon as postexec is set.
-			DEBUG("RISC-V register 0x%"PRIx16"\n does not exist", gpr);
+	// Only initiate the write, if not in autoexec cont state
+	if (astate != AUTOEXEC_STATE_CONT) {
+		// Initiate register write command
+		if ((ret = rvdbg_abstract_command_run(dp, command)) < 0)
 			return -1;
-		default:
-			DEBUG("RISC-V abstract command error: %d\n", ret);
+		
+		// Handle error
+		switch (ret) {
+			case ABSTRACTCMD_ERR_NONE:
+				break;
+			case ABSTRACTCMD_ERR_EXCEPTION:
+				// TODO: This check becomes invalid as soon as postexec is set.
+				DEBUG("RISC-V register 0x%"PRIx16"\n does not exist", reg_id);
+				return -1;
+			default:
+				DEBUG("RISC-V abstract command error: %d\n", ret);
+				return -1;
+		}
+	} else {
+		// When in cont state, make sure to wait until write is done
+		do {
+			if (rvdbg_dmi_read(dp, DMI_REG_ABSTRACT_CS, &abstractcs) < 0)
+				return -1;
+		} while (ABSTRACTCS_GET_BUSY(abstractcs));
+	}
+
+
+	return 0;
+}
+
+static int rvdbg_write_regs(RVDBGv013_DP_t *dp, uint16_t reg_id, const uint32_t *values,
+	uint16_t len)
+{
+	enum AUTOEXEC_STATE astate = AUTOEXEC_STATE_NONE;
+	uint32_t abstractauto;
+	uint16_t i;
+	int err = 0;
+
+	// When more than one reg written and autoexec support
+	if (len > 1  && dp->support_autoexecdata) {
+		astate = AUTOEXEC_STATE_INIT;
+		abstractauto = 0;
+		ABSTRACTAUTO_SET_DATA(abstractauto, ABSTRACTAUTO_SOME_PATTEN);
+		if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACT_AUTOEXEC, abstractauto) < 0)
 			return -1;
 	}
 
-	return 0;
+	for (i = 0; i < len; i++) {
+		if (rvdbg_write_single_reg(dp, reg_id + i, values[i], astate) < 0) {
+			err = -1;
+			break;
+		}
+		if (astate == AUTOEXEC_STATE_INIT)
+			astate = AUTOEXEC_STATE_CONT;
+	}
+
+	// Reset auto exec state
+	if (astate != AUTOEXEC_STATE_NONE) {
+		abstractauto = 0;
+		ABSTRACTAUTO_SET_DATA(abstractauto, 0);
+		if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACT_AUTOEXEC, abstractauto) < 0)
+			return -1;
+	}
+
+	return err;
+}
+
+static int rvdbg_read_regs(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t *values,
+	uint16_t len)
+{
+	enum AUTOEXEC_STATE astate = AUTOEXEC_STATE_NONE;
+	uint32_t abstractauto;
+	uint16_t i;
+	int err = 0;
+
+	// When more than one reg read and autoexec support
+	if (len > 1  && dp->support_autoexecdata) {
+		astate = AUTOEXEC_STATE_INIT;
+		abstractauto = 0;
+		ABSTRACTAUTO_SET_DATA(abstractauto, ABSTRACTAUTO_SOME_PATTEN);
+		if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACT_AUTOEXEC, abstractauto) < 0)
+			return -1;
+	}
+
+	for (i = 0; i < len; i++) {
+		if (rvdbg_read_single_reg(dp, reg_id + i, &values[i], astate) < 0) {
+			err = -1;
+			break;
+		}
+		if (astate == AUTOEXEC_STATE_INIT)
+			astate = AUTOEXEC_STATE_CONT;
+	}
+
+	// Reset auto exec state
+	if (astate != AUTOEXEC_STATE_NONE) {
+		abstractauto = 0;
+		ABSTRACTAUTO_SET_DATA(abstractauto, 0);
+		if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACT_AUTOEXEC, abstractauto) < 0)
+			return -1;
+	}
+
+	return err;
 }
 
 static int rvdbg_progbuf_upload(RVDBGv013_DP_t *dp, const uint32_t* buffer, uint8_t buffer_len)
@@ -455,23 +568,23 @@ static int rvdbg_progbuf_upload(RVDBGv013_DP_t *dp, const uint32_t* buffer, uint
 	}
 }
 
-static void rvdbg_progbuf_exec(RVDBGv013_DP_t *dp, uint32_t a)
-{
-	// Backup argument registers
+// static void rvdbg_progbuf_exec(RVDBGv013_DP_t *dp, uint32_t *args, uint8_t arglen)
+// {
+// 	// Backup argument registers
 
-}
+// }
 
-static void rvdbg_read_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t* value) { }
+// static void rvdbg_read_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t* value) { }
 
-static void rvdbg_write_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t value) { }
+// static void rvdbg_write_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t value) { }
 
-static void rvdbg_read_mem_progbuf(RVDBGv013_DP_t *dp, uint32_t address, uint32_t* value) { }
+// static void rvdbg_read_mem_progbuf(RVDBGv013_DP_t *dp, uint32_t address, uint32_t* value) { }
 
-static void rvdbg_write_mem_progbuf(RVDBGv013_DP_t *dp, uint32_t address, uint32_t value) { }
+// static void rvdbg_write_mem_progbuf(RVDBGv013_DP_t *dp, uint32_t address, uint32_t value) { }
 
 static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DP_t *dp)
 {
-	uint32_t abstractcs;
+	uint32_t abstractcs, abstractauto;
 	
 	if (rvdbg_dmi_read(dp, DMI_REG_ABSTRACT_CS, &abstractcs) < 0)
 		return -1;
@@ -504,12 +617,29 @@ static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DP_t *dp)
 		// PROGBUF supported
 		DEBUG("RISC-V: Program buffer with size %d supported.\n", dp->progbuf_size);
 
-		dp->read_csr = rvdbg_read_csr_progbuf;
-		dp->write_csr = rvdbg_write_csr_progbuf;
-		dp->read_mem = rvdbg_read_mem_progbuf;
-		dp->write_mem = rvdbg_write_mem_progbuf;
+		// dp->read_csr = rvdbg_read_csr_progbuf;
+		// dp->write_csr = rvdbg_write_csr_progbuf;
+		// dp->read_mem = rvdbg_read_mem_progbuf;
+		// dp->write_mem = rvdbg_write_mem_progbuf;
 	}
 
+	// Check if autoexecdata feature can be used
+	// -----------------------------------------
+	abstractauto = 0;
+	ABSTRACTAUTO_SET_DATA(abstractauto, ABSTRACTAUTO_SOME_PATTEN);
+	if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACT_AUTOEXEC, abstractauto) < 0)
+		return -1;
+	if (rvdbg_dmi_read(dp, DMI_REG_ABSTRACT_AUTOEXEC, &abstractauto) < 0)
+		return -1;
+
+	if (ABSTRACTAUTO_GET_DATA(abstractauto) == ABSTRACTAUTO_SOME_PATTEN) {
+		DEBUG("RISC-V: autoexecdata feature supported\n");
+		dp->support_autoexecdata = true;
+	}
+
+	ABSTRACTAUTO_SET_DATA(abstractauto, 0);
+	if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACT_AUTOEXEC, abstractauto) < 0)
+		return -1;
 
 	return 0;
 }
