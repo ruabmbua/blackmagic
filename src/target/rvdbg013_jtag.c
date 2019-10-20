@@ -107,12 +107,19 @@ enum DMI_REG {
 #define DMSTATUS_GET_AUTHBUSY(x)		((x >> 6) & 0x1)
 #define DMSTATUS_GET_AUTHENTICATED(x)   ((x >> 7) & 0x1)
 #define DMSTATUS_GET_ANYNONEXISTENT(x)  ((x >> 14) & 0x1)
+#define DMSTATUS_GET_IMPEBREAK(x)	    ((x >> 22) & 0x1)
 
 #define DMCONTROL_GET_HARTSEL(x)     (((x >> 16) & 0x3ff) | (((x >> 6) & 0x3ff) << 10))
 #define DMCONTROL_SET_HARTSEL(t, s)  do { \
 	t &= ~(0xfffff << 6); \
 	t |= (s & 0x3ff) << 16; \
 	t |= (s & (0x3ff << 10) >> 4); } while(0)
+
+#define ABSTRACTCS_GET_DATACOUNT(x)   (x & 0xf)
+#define ABSTRACTCS_GET_CMDERR(x)      ((x >> 8) & 0x7)
+#define ABSTRACTCS_CLEAR_CMDERR(t) d0 { t |= (0x7 << 8);} while (0)
+#define ABSTRACTCS_GET_BUSY(x)		  ((x >> 12) & 0x1)
+#define ABSTRACTCS_GET_PROGBUFSIZE(x) ((x >> 24) & 0x1f)
 
 static int rvdbg_jtag_init(RVDBGv013_DP_t *dp);
 
@@ -144,24 +151,27 @@ static void rvdbg_dmi_reset(RVDBGv013_DP_t *dp, bool hard_reset)
 
 	jtag_dev_shift_dr(dp->dev, (void*)&dtmcontrol, (void*)&dtmcontrol, 32);
 
-	DEBUG("after dmireset: dtmcs = 0x%08x\n", (uint32_t)dtmcontrol);
+	// DEBUG("after dmireset: dtmcs = 0x%08x\n", (uint32_t)dtmcontrol);
 }
 
+// TODO: Rewrite to always use proper run/test/idle timing
 static int rvdbg_dmi_low_access(RVDBGv013_DP_t *dp, uint32_t *dmi_data_out, uint64_t dmi_cmd)
 {
 	uint64_t dmi_ret;
 
 retry:
-	jtag_dev_shift_dr(dp->dev, (void*)&dmi_ret, (const void*)&dmi_cmd, DMI_BASE_BIT_COUNT + dp->abits);
+	jtag_dev_shift_dr(dp->dev, (void*)&dmi_ret, (const void*)&dmi_cmd,
+		DMI_BASE_BIT_COUNT + dp->abits);
 
 	switch (DMI_GET_OP(dmi_ret)) {
 		case DMISTAT_OP_INTERRUPTED:
 			// Retry after idling, restore last dmi
 			rvdbg_dmi_reset(dp, false);
 			jtag_dev_write_ir(dp->dev, IR_DMI);
-			jtag_dev_shift_dr(dp->dev, (void*)&dmi_ret, (const void*)&dp->last_dmi, DMI_BASE_BIT_COUNT + dp->abits);
+			jtag_dev_shift_dr(dp->dev, (void*)&dmi_ret, (const void*)&dp->last_dmi,
+				DMI_BASE_BIT_COUNT + dp->abits);
 
-			DEBUG("in 0x%"PRIx64"\n", dmi_ret);
+			// DEBUG("in 0x%"PRIx64"\n", dmi_ret);
 
 			if (dp->idle >= 2)
 				jtagtap_tms_seq(0, dp->idle - 1);
@@ -189,7 +199,8 @@ retry:
 
 static int rvdbg_dmi_write(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t data)
 {
-	return rvdbg_dmi_low_access(dp, NULL, ((uint64_t)addr << DMI_BASE_BIT_COUNT) | (data << 2) | DMI_OP_WRITE);
+	return rvdbg_dmi_low_access(dp, NULL, 
+		((uint64_t)addr << DMI_BASE_BIT_COUNT) | (data << 2) | DMI_OP_WRITE);
 }
 
 static int rvdbg_dmi_read(RVDBGv013_DP_t *dp, uint32_t addr, uint32_t *data)
@@ -277,6 +288,46 @@ static int rvdbg_discover_harts(RVDBGv013_DP_t *dp)
 	return 0;
 }
 
+static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DP_t *dp)
+{
+	uint32_t abstractcs;
+	
+	if (rvdbg_dmi_read(dp, DMI_REG_ABSTRACT_CS, &abstractcs) < 0)
+		return -1;
+
+	dp->progbuf_size = ABSTRACTCS_GET_PROGBUFSIZE(abstractcs);
+	dp->abstract_data_count = ABSTRACTCS_GET_DATACOUNT(abstractcs);
+
+	if (dp->abstract_data_count < 1 || dp->abstract_data_count > 12) {
+		// Invalid count of abstract data
+		DEBUG("RISC-V: Invalid count of abstract data: %d\n", dp->abstract_data_count);
+		return -1;
+	}
+
+	if (dp->progbuf_size > 16) {
+		// Invalid progbuf size
+		DEBUG("RISC-V: progbufsize is too large: %d\n", dp->progbuf_size);
+		return -1;
+	} else if (dp->progbuf_size == 1 && !dp->impebreak) {
+		// When progbufsize is 1, impebreak is required.
+		DEBUG("RISC-V: progbufsize 1 requires impebreak feature\n");
+		return -1;
+	}
+
+	// DEBUG("datacount = %d\n", dp->abstract_data_count);
+
+	// Check if a program buffer is supported, and it is sufficient for accessing
+	// CSR and / or MEMORY.
+	// --------------------------------------------------------------------------
+	if (dp->progbuf_size > 0) {
+		// PROGBUF supported
+		DEBUG("RISC-V: Program buffer with size %d supported.\n", dp->progbuf_size);
+	}
+
+
+	return 0;
+}
+
 static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 {
 	uint64_t dtmcontrol; /* uint64_t due to https://github.com/blacksphere/blackmagic/issues/542 */
@@ -337,15 +388,33 @@ static int rvdbg_jtag_init(RVDBGv013_DP_t *dp)
 			rvdbg_set_debug_version(dp, version);
 	}
 
+	// TODO: Implement authentification plugins
+	if (!DMSTATUS_GET_AUTHENTICATED(dmstatus)) {
+		// Not authentificated -> not supported
+		DEBUG("RISC-V DM requires authentification!\n");
+		return -1;
+	}
+
+	if (DMSTATUS_GET_CONFSTRPTRVALID(dmstatus)) {
+		DEBUG("RISC-V configuration string available\n");
+	}
+
 	if (rvdbg_dmi_read(dp, DMI_REG_NEXTDM_ADDR, &nextdmaddr) < 0)
 		return -1;
-
 	if (nextdmaddr) {
 		// Multiple DM per DMI not yet supported
 		DEBUG("Warning: Detected multiple RISC-V debug modules, only one supported!\n");
 	}
 
-	if (rvdbg_discover_harts(dp) < 0)
+	// Get impebreak before selecting mem and csr access impl
+	dp->impebreak = DMSTATUS_GET_IMPEBREAK(dmstatus);
+
+	if (rvdbg_select_mem_and_csr_access_impl(dp) < 0) {
+		DEBUG("RISC-V: no compatible MEM / CSR access implementation detected.\n");
+		return -1;
+	}
+
+	if (rvdbg_discover_harts(dp) < 0) 
 		return -1;
 
 	return 0;

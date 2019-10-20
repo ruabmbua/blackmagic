@@ -23,6 +23,8 @@
 
 #include "jtag_scan.h"
 
+#define RVDBG_MAX_HARTS 8
+
 enum RISCV_DEBUG_VERSION {
 	RISCV_DEBUG_VERSION_011 	= 0,
 	RISCV_DEBUG_VERSION_013 	= 1,
@@ -41,13 +43,14 @@ typedef struct RVDBGv013_DP_s {
     enum RISCV_DEBUG_VERSION debug_version;
     uint8_t idle;
     uint8_t abits;
-    HART_t harts[4];
+    uint8_t progbuf_size;
+    bool impebreak;
+    uint8_t abstract_data_count;
+
+    HART_t harts[RVDBG_MAX_HARTS];
     uint8_t num_harts;
 
     uint64_t last_dmi;
-
-    // uint32_t (*dp_read)(struct RVDBGv013_DP_s *dp, uint16_t addr);
-    // uint32_t (*error)(struct RVDBGv013_DP_s *dp);
 
     jtag_dev_t *dev;
 } RVDBGv013_DP_t;
