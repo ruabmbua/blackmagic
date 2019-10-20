@@ -52,6 +52,15 @@ typedef struct RVDBGv013_DP_s {
 
     uint64_t last_dmi;
 
+    // Back up registers for progbuf communication
+    uint32_t x1_backup;
+    uint32_t x2_backup;
+
+    void (*read_csr)(struct RVDBGv013_DP_s *dp, uint16_t reg_id, uint32_t *value);
+    void (*write_csr)(struct RVDBGv013_DP_s *dp, uint16_t reg_id, uint32_t value);
+    void (*read_mem)(struct RVDBGv013_DP_s *dp, uint32_t address, uint32_t *value);
+    void (*write_mem)(struct RVDBGv013_DP_s *dp, uint32_t address, uint32_t value);
+
     jtag_dev_t *dev;
 } RVDBGv013_DP_t;
 

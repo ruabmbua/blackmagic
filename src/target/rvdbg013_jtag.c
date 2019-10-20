@@ -57,37 +57,61 @@ enum DMI_OP {
 };
 
 enum DMI_REG {
-	DMI_REG_ABSTRACT_DATA0    = 0x04,
-	DMI_REG_ABSTRACT_DATA11   = 0x0f,
-	DMI_REG_DMCONTROL         = 0x10,
-	DMI_REG_DMSTATUS          = 0x11,
-	DMI_REG_HARTINFO          = 0x12,
-	DMI_REG_HALTSUM1          = 0x13,
-	DMI_REG_HAWINDOWSEL       = 0x14,
-	DMI_REG_HAWINDOW          = 0x15,
-	DMI_REG_ABSTRACT_CS       = 0x16,
-	DMI_REG_ABSTRACT_CMD      = 0x17,
-	DMI_REG_ABSTRACT_AUTOEXEC = 0x18,
-	DMI_REG_CONFSTR_PTR0      = 0x19,
-	DMI_REG_CONFSTR_PTR1      = 0x1a,
-	DMI_REG_CONFSTR_PTR2      = 0x1b,
-	DMI_REG_CONFSTR_PTR3      = 0x1c,
-	DMI_REG_NEXTDM_ADDR       = 0x1d,
-	DMI_REG_PROGRAMBUF_BEGIN  = 0x20,
-	DMI_REG_PROGRAMBUF_END    = 0x2f,
-	DMI_REG_AUTHDATA		  = 0x30,
-	DMI_REG_HALTSUM2          = 0x34,
-	DMI_REG_HALTSUM3 		  = 0x35,
-	DMI_REG_SBADDRESS3		  = 0x37,
-	DMI_REG_SYSBUSCS          = 0x38,
-	DMI_REG_SBADDRESS0		  = 0x39,
-	DMI_REG_SBADDRESS1		  = 0x3a,
-	DMI_REG_SBADDRESS2		  = 0x3b,
-	DMI_REG_SBDATA0			  = 0x3c,
-	DMI_REG_SBDATA1			  = 0x3d,
-	DMI_REG_SBDATA2			  = 0x3e,
-	DMI_REG_SBDATA3			  = 0x3f,
-	DMI_REG_HALTSUM0	 	  = 0x40,
+	DMI_REG_ABSTRACTDATA_BEGIN = 0x04,
+	DMI_REG_ABSTRACTDATA_END   = 0x0f,
+	DMI_REG_DMCONTROL          = 0x10,
+	DMI_REG_DMSTATUS           = 0x11,
+	DMI_REG_HARTINFO           = 0x12,
+	DMI_REG_HALTSUM1           = 0x13,
+	DMI_REG_HAWINDOWSEL        = 0x14,
+	DMI_REG_HAWINDOW           = 0x15,
+	DMI_REG_ABSTRACT_CS        = 0x16,
+	DMI_REG_ABSTRACT_CMD       = 0x17,
+	DMI_REG_ABSTRACT_AUTOEXEC  = 0x18,
+	DMI_REG_CONFSTR_PTR0       = 0x19,
+	DMI_REG_CONFSTR_PTR1       = 0x1a,
+	DMI_REG_CONFSTR_PTR2       = 0x1b,
+	DMI_REG_CONFSTR_PTR3       = 0x1c,
+	DMI_REG_NEXTDM_ADDR        = 0x1d,
+	DMI_REG_PROGRAMBUF_BEGIN   = 0x20,
+	DMI_REG_PROGRAMBUF_END     = 0x2f,
+	DMI_REG_AUTHDATA		   = 0x30,
+	DMI_REG_HALTSUM2           = 0x34,
+	DMI_REG_HALTSUM3 		   = 0x35,
+	DMI_REG_SBADDRESS3		   = 0x37,
+	DMI_REG_SYSBUSCS           = 0x38,
+	DMI_REG_SBADDRESS0		   = 0x39,
+	DMI_REG_SBADDRESS1		   = 0x3a,
+	DMI_REG_SBADDRESS2		   = 0x3b,
+	DMI_REG_SBDATA0			   = 0x3c,
+	DMI_REG_SBDATA1			   = 0x3d,
+	DMI_REG_SBDATA2			   = 0x3e,
+	DMI_REG_SBDATA3			   = 0x3f,
+	DMI_REG_HALTSUM0	 	   = 0x40,
+};
+
+enum ABSTRACTCMD_TYPE {
+	ABSTRACTCMD_TYPE_ACCESS_REGISTER = 0x0,
+	ABSTRACTCMD_TYPE_QUICK_ACCESS    = 0x1,
+	ABSTRACTCMD_TYPE_ACCESS_MEMORY   = 0x2,
+};
+
+enum BUS_ACCESS {
+	BUS_ACCESS_8   = 0x0,
+	BUS_ACCESS_16  = 0x1,
+	BUS_ACCESS_32  = 0x2,
+	BUS_ACCESS_64  = 0x3,
+	BUS_ACCESS_128 = 0x4,
+};
+
+enum ABSTRACTCMD_ERR {
+	ABSTRACTCMD_ERR_NONE = 0x0,
+	ABSTRACTCMD_ERR_BUSY = 0x1,
+	ABSTRACTCMD_ERR_NOT_SUPPORTED = 0x2,
+	ABSTRACTCMD_ERR_EXCEPTION = 0x3,
+	ABSTRACTCMD_ERR_HALT_RESUME = 0x4,
+	ABSTRACTCMD_ERR_BUS = 0x5,
+	ABSTRACTCMD_ERR_OTHER = 0x7,
 };
 
 #define DMI_BASE_BIT_COUNT   		 34
@@ -117,9 +141,33 @@ enum DMI_REG {
 
 #define ABSTRACTCS_GET_DATACOUNT(x)   (x & 0xf)
 #define ABSTRACTCS_GET_CMDERR(x)      ((x >> 8) & 0x7)
-#define ABSTRACTCS_CLEAR_CMDERR(t) d0 { t |= (0x7 << 8);} while (0)
+#define ABSTRACTCS_CLEAR_CMDERR(t) do { t |= (0x7 << 8);} while (0)
 #define ABSTRACTCS_GET_BUSY(x)		  ((x >> 12) & 0x1)
 #define ABSTRACTCS_GET_PROGBUFSIZE(x) ((x >> 24) & 0x1f)
+
+#define ABSTRACTCMD_SET_TYPE(t, s) do { \
+	t &= ~(0xff << 24); \
+	t |= (s & 0xff) << 24; } while (0)
+#define ABSTRACTCMD_ACCESS_REGISTER_SET_AARSIZE(t, s) do { \
+	t &= ~(0x7 << 20); \
+	t |= (s & 0x7) << 20; } while (0)
+#define ABSTRACTCMD_ACCESS_REGISTER_SET_AARPOSTINCREMENT(t, s) do { \
+	t &= ~(0x1 << 19); \
+	t |= (s & 0x1) << 19; } while (0)
+#define ABSTRACTCMD_ACCESS_REGISTER_SET_POSTEXEC(t, s) do { \
+	t &= ~(0x1 << 18); \
+	t |= (s & 0x1) << 18; } while (0)
+#define ABSTRACTCMD_ACCESS_REGISTER_SET_TRANSFER(t, s) do { \
+	t &= ~(0x1 << 17); \
+	t |= (s & 0x1) << 17; } while (0)
+#define ABSTRACTCMD_ACCESS_REGISTER_SET_WRITE(t, s) do { \
+	t &= ~(0x1 << 16); \
+	t |= (s & 0x1) << 16; } while (0)
+#define ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(t, s) do { \
+	t &= ~(0xffff); \
+	t |= s & 0xffff; } while (0)
+
+
 
 static int rvdbg_jtag_init(RVDBGv013_DP_t *dp);
 
@@ -288,6 +336,139 @@ static int rvdbg_discover_harts(RVDBGv013_DP_t *dp)
 	return 0;
 }
 
+/**
+ * Returns negative error, or positive cmderror
+ */
+static int rvdbg_abstract_command_run(RVDBGv013_DP_t *dp, uint32_t command)
+{
+	uint32_t abstractcs;
+	uint8_t cmderror;
+
+retry:
+	if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACT_CMD, command) < 0)
+		return -1;
+
+	// Wait until the abstract command finished
+	do {
+		if (rvdbg_dmi_read(dp, DMI_REG_ABSTRACT_CS, &abstractcs) < 0)
+			return -1;
+	} while (ABSTRACTCS_GET_BUSY(abstractcs));
+
+	cmderror = ABSTRACTCS_GET_CMDERR(abstractcs);
+
+	if (cmderror != ABSTRACTCMD_ERR_NONE) {
+		// Clear the error
+		abstractcs = 0;
+		ABSTRACTCS_CLEAR_CMDERR(abstractcs);
+		if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACT_CS, abstractcs) < 0)
+			return -1;
+
+		// Handle ERR_BUSY retries automatically
+		if (cmderror == ABSTRACTCMD_ERR_BUSY) {
+			DEBUG("RISC-V abstract command busy, retry...\n");
+			goto retry;
+		}
+	}
+
+	return cmderror;
+}
+
+static int rvdbg_read_gpr(RVDBGv013_DP_t *dp, uint16_t gpr, uint32_t *out)
+{
+	uint32_t command = 0;
+	int ret;
+
+	// Construct abstract command
+	// TODO: Do not expect XLEN of 32 by default
+	ABSTRACTCMD_SET_TYPE(command, ABSTRACTCMD_TYPE_ACCESS_REGISTER);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_AARSIZE(command, BUS_ACCESS_32);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_TRANSFER(command, 1);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(command, gpr);
+
+	// Initiate register read command
+	if ((ret = rvdbg_abstract_command_run(dp, command)) < 0)
+		return -1;
+
+	// Handle error
+	switch (ret) {
+		case ABSTRACTCMD_ERR_NONE:
+			break;
+		case ABSTRACTCMD_ERR_EXCEPTION:
+			// TODO: This check becomes invalid as soon as postexec is set.
+			DEBUG("RISC-V register 0x%"PRIx16"\n does not exist", gpr);
+			return -1;
+		default:
+			DEBUG("RISC-V abstract command error: %d\n", ret);
+			return -1;
+	}
+
+	if (rvdbg_dmi_read(dp, DMI_REG_ABSTRACTDATA_BEGIN, out) < 0)
+		return -1;
+
+	return 0;
+}
+
+static int rvdbg_write_gpr(RVDBGv013_DP_t *dp, uint16_t gpr, uint32_t value)
+{
+	uint32_t command = 0;
+	int ret;
+
+	// Write value to data0
+	if (rvdbg_dmi_write(dp, DMI_REG_ABSTRACTDATA_BEGIN, value) < 0)
+		return -1;
+
+	// Construct abstract command
+	// TODO: Do not expect XLEN of 32 by default
+	ABSTRACTCMD_SET_TYPE(command, ABSTRACTCMD_TYPE_ACCESS_REGISTER);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_AARSIZE(command, BUS_ACCESS_32);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_TRANSFER(command, 1);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_WRITE(command, 1);
+	ABSTRACTCMD_ACCESS_REGISTER_SET_REGNO(command, gpr);
+
+	// Initiate register write command
+	if ((ret = rvdbg_abstract_command_run(dp, command)) < 0)
+		return -1;
+
+	// Handle error
+	switch (ret) {
+		case ABSTRACTCMD_ERR_NONE:
+			break;
+		case ABSTRACTCMD_ERR_EXCEPTION:
+			// TODO: This check becomes invalid as soon as postexec is set.
+			DEBUG("RISC-V register 0x%"PRIx16"\n does not exist", gpr);
+			return -1;
+		default:
+			DEBUG("RISC-V abstract command error: %d\n", ret);
+			return -1;
+	}
+
+	return 0;
+}
+
+static int rvdbg_progbuf_upload(RVDBGv013_DP_t *dp, const uint32_t* buffer, uint8_t buffer_len)
+{
+	uint8_t i;
+
+	for (i = DMI_REG_PROGRAMBUF_BEGIN; i < buffer_len; i++) {
+		if (rvdbg_dmi_write(dp, DMI_REG_PROGRAMBUF_BEGIN + i, buffer[i]) < 0)
+			return -1;
+	}
+}
+
+static void rvdbg_progbuf_exec(RVDBGv013_DP_t *dp, uint32_t a)
+{
+	// Backup argument registers
+
+}
+
+static void rvdbg_read_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t* value) { }
+
+static void rvdbg_write_csr_progbuf(RVDBGv013_DP_t *dp, uint16_t reg_id, uint32_t value) { }
+
+static void rvdbg_read_mem_progbuf(RVDBGv013_DP_t *dp, uint32_t address, uint32_t* value) { }
+
+static void rvdbg_write_mem_progbuf(RVDBGv013_DP_t *dp, uint32_t address, uint32_t value) { }
+
 static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DP_t *dp)
 {
 	uint32_t abstractcs;
@@ -322,6 +503,11 @@ static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DP_t *dp)
 	if (dp->progbuf_size > 0) {
 		// PROGBUF supported
 		DEBUG("RISC-V: Program buffer with size %d supported.\n", dp->progbuf_size);
+
+		dp->read_csr = rvdbg_read_csr_progbuf;
+		dp->write_csr = rvdbg_write_csr_progbuf;
+		dp->read_mem = rvdbg_read_mem_progbuf;
+		dp->write_mem = rvdbg_write_mem_progbuf;
 	}
 
 
