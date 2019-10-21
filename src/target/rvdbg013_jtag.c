@@ -30,7 +30,6 @@
 #include "jtagtap.h"
 #include "morse.h"
 #include "rvdbg.h"
-#include "rv32i_isa.h"
 
 typedef struct RVDBGv013_JTAG_s {
 	RVDBGv013_DMI_t dmi;

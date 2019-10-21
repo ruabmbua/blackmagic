@@ -26,9 +26,6 @@
 #include <limits.h>
 #include "general.h"
 #include "exception.h"
-#include "jtag_scan.h"
-#include "jtagtap.h"
-#include "morse.h"
 #include "rvdbg.h"
 #include "rv32i_isa.h"
 
