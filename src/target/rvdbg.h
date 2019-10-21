@@ -70,10 +70,13 @@ typedef struct RVDBGv013_DTM_s {
     bool impebreak;
     uint8_t abstract_data_count;
     bool support_autoexecdata;
+    bool support_multi_hasel;
 
     HART_t harts[RVDBG_MAX_HARTS];
     uint8_t num_harts;
     HART_t *current_hart;
+
+    uint32_t last_dmcontrol;
 
     int (*rvdbg_dmi_low_access)(struct RVDBGv013_DTM_s *dtm, uint32_t *dmi_data_out, uint64_t dmi_cmd);
     void (*rvdbg_dmi_reset)(struct RVDBGv013_DTM_s *dtm, bool hard_reset);
