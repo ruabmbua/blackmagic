@@ -64,8 +64,8 @@ static int rvdbg_dmi_low_access_jtag(RVDBGv013_DMI_t *dmi, uint32_t *dmi_data_ou
 retry:
 	jtag_dev_shift_dr(rvdbg_jtag->dev, (void*)&dmi_ret, (const void*)&dmi_cmd,
 		DMI_BASE_BIT_COUNT + dmi->abits);
-	if (dmi->idle >= 2)
-		jtagtap_tms_seq(0, dmi->idle - 1);
+	if (dmi->idle >= 2 + 2)
+		jtagtap_tms_seq(0, dmi->idle - (1 + 2));
 
 	switch (DMI_GET_OP(dmi_ret)) {
 		case DMISTAT_OP_INTERRUPTED:
