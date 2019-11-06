@@ -52,16 +52,21 @@ enum RISCV_DEBUG_VERSION {
 typedef struct HART_s {
     uint8_t idx;
     uint8_t mhartid;
+    uint8_t nscratch;
+    bool dataaccess;
+    uint8_t datasize;
+    uint16_t dataaddr;
 
     // Back up registers for progbuf communication (excludes x0)
     // TODO: Do not assume XLEN 32
     uint32_t gp_register_backup[31];
 } HART_t;
 
-typedef struct RVDBGv013_DTM_s {
+typedef struct RVDBGv013_DMI_s {
     int refcnt;
 
     uint32_t idcode;
+    const char* descr;
     enum RISCV_DEBUG_VERSION debug_version;
     uint8_t idle;
     uint8_t abits;
@@ -76,13 +81,14 @@ typedef struct RVDBGv013_DTM_s {
     uint8_t num_harts;
     uint8_t current_hart;
 
-    int (*rvdbg_dmi_low_access)(struct RVDBGv013_DTM_s *dtm, uint32_t *dmi_data_out, uint64_t dmi_cmd);
-    void (*rvdbg_dmi_reset)(struct RVDBGv013_DTM_s *dtm, bool hard_reset);
+    int (*rvdbg_dmi_low_access)(struct RVDBGv013_DMI_s *dmi, uint32_t *dmi_data_out, uint64_t dmi_cmd);
+    void (*rvdbg_dmi_reset)(struct RVDBGv013_DMI_s *dmi, bool hard_reset);
+    void (*rvdbg_dmi_free)(struct RVDBGv013_DMI_s *dmi);
 
-    int (*read_csr)(struct RVDBGv013_DTM_s *dp, uint16_t reg_id, uint32_t *value);
-    int (*write_csr)(struct RVDBGv013_DTM_s *dp, uint16_t reg_id, uint32_t value);
-    int (*read_mem)(struct RVDBGv013_DTM_s *dp, uint32_t address, uint32_t *value);
-    int (*write_mem)(struct RVDBGv013_DTM_s *dp, uint32_t address, uint32_t value);
+    int (*read_csr)(struct RVDBGv013_DMI_s *dmi, uint16_t reg_id, uint32_t *value);
+    int (*write_csr)(struct RVDBGv013_DMI_s *dmi, uint16_t reg_id, uint32_t value);
+    int (*read_mem)(struct RVDBGv013_DMI_s *dmi, uint32_t address, uint32_t *value);
+    int (*write_mem)(struct RVDBGv013_DMI_s *dmi, uint32_t address, uint32_t value);
 } RVDBGv013_DMI_t;
 
 enum DTM_REGISTERS {
@@ -98,7 +104,7 @@ enum DMISTAT {
 	DMISTAT_NO_ERROR       = 0,
 	DMISTAT_RESERVED       = 1,
 	DMISTAT_OP_FAILED      = 2,
-	DMISTAT_OP_INTERRUPTED = 3,
+	DMISTAT_OP_BUSY = 3,
 };
 
 int rvdbg_dtm_init(RVDBGv013_DMI_t *dtm);

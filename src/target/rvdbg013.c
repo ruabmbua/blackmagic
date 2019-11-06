@@ -26,6 +26,9 @@
 #include <limits.h>
 #include "general.h"
 #include "exception.h"
+#include "target.h"
+#include "target_internal.h"
+
 #include "rvdbg.h"
 #include "rv32i_isa.h"
 
@@ -124,6 +127,7 @@ enum HART_REG {
 #define DMCONTROL_HALTREQ             (0x1U << 31)
 #define DMCONTROL_HARTRESET           (0x1U << 29)
 #define DMCONTROL_DMACTIVE            (0x1)
+#define DMCONTROL_NDMRESET		      (0x1U << 1)
 #define DMCONTROL_ACKHAVERESET        (0x1 << 28)
 #define DMCONTROL_SRESETHALTREQ       (0x1U << 3)
 #define DMCONTROL_CRESETHALTREQ       (0x1U << 2)
@@ -172,14 +176,18 @@ void rvdbg_dtm_ref(RVDBGv013_DMI_t *dtm)
 void rvdbg_dtm_unref(RVDBGv013_DMI_t *dtm)
 {
     if (--dtm->refcnt == 0) {
-        free(dtm);
+        dtm->rvdbg_dmi_free(dtm);
     }
 }
 
 static int rvdbg_dmi_write(RVDBGv013_DMI_t *dmi, uint32_t addr, uint32_t data)
 {
-	return dmi->rvdbg_dmi_low_access(dmi, NULL, 
-		((uint64_t)addr << DMI_BASE_BIT_COUNT) | (data << 2) | DMI_OP_WRITE);
+	if (dmi->rvdbg_dmi_low_access(dmi, NULL, 
+			((uint64_t)addr << DMI_BASE_BIT_COUNT) | (data << 2) | DMI_OP_WRITE) < 0) {
+		return -1;
+	}
+
+	return dmi->rvdbg_dmi_low_access(dmi, NULL, DMI_OP_NOP);
 }
 
 static int rvdbg_dmi_read(RVDBGv013_DMI_t *dmi, uint32_t addr, uint32_t *data)
@@ -223,23 +231,19 @@ static const char* rvdbg_version_tostr(enum RISCV_DEBUG_VERSION version)
 }
 #endif /* ENABLE_DEBUG */
 
-static int rvdbg_halt_hart(RVDBGv013_DMI_t *dmi, uint8_t hart_idx)
+// TODO: Remove
+__attribute_used__
+static int rvdbg_halt_current_hart(RVDBGv013_DMI_t *dmi)
 {
 	uint32_t dmstatus, dmcontrol;
 
 	DEBUG("current hart = %d\n", dmi->current_hart);
 
-    // Check if hart is already active, when not activate it
-    if (dmi->current_hart != hart_idx) {
-		dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx);
-		if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol) < 0)
-			return -1;
-		dmi->current_hart = hart_idx;
-		DEBUG("will change to hart = %d\n", hart_idx);
-	}
-
 	// Trigger the halt request
-	dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx) | DMCONTROL_HALTREQ;
+	if (rvdbg_dmi_read(dmi, DMI_REG_DMCONTROL, &dmcontrol) < 0)
+			return -1;
+
+	dmcontrol |= DMCONTROL_HALTREQ;
 	if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol) < 0)
 		return -1;
 
@@ -249,8 +253,7 @@ static int rvdbg_halt_hart(RVDBGv013_DMI_t *dmi, uint8_t hart_idx)
 			return -1;
 		if (DMSTATUS_GET_ANYHAVERESET(dmstatus)) {
 			DEBUG("RISC-V: got reset, while trying to halt\n");
-			dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx) | DMCONTROL_ACKHAVERESET;
-			if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol) < 0)
+			if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol | DMCONTROL_ACKHAVERESET) < 0)
 				return -1;
 		}
 		if (DMSTATUS_GET_ALLHALTED(dmstatus))
@@ -260,25 +263,68 @@ static int rvdbg_halt_hart(RVDBGv013_DMI_t *dmi, uint8_t hart_idx)
 	if (!DMSTATUS_GET_ALLHALTED(dmstatus)) {
 		if (rvdbg_dmi_read(dmi, DMI_REG_DMSTATUS, &dmstatus) < 0)
 			return -1;
+
+		// DEBUG("RISC-V: error, can not halt hart %d, dmstatus = 0x%08x\n", 
+		// 	dmi->current_hart, dmstatus);
+
 		DEBUG("RISC-V: error, can not halt hart %d, dmstatus = 0x%08x -> trying resethaltreq\n", 
-			hart_idx, dmstatus);
+			dmi->current_hart, dmstatus);
 
-		dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx) | DMCONTROL_SRESETHALTREQ;
+		if (dmi->support_resethaltreq) {
+			if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol | DMCONTROL_SRESETHALTREQ) < 0)
+				return -1;
+		}
+
+		if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol | DMCONTROL_NDMRESET | DMCONTROL_HARTRESET) < 0)
+			return -1;
+
+		platform_delay(1000);
+
 		if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol) < 0)
 			return -1;
 
-		dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx) | DMCONTROL_HARTRESET;
-		if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol) < 0)
-			return -1;
-
-		dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx);
-		if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol) < 0)
-			return -1;
-
-		dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx) | DMCONTROL_CRESETHALTREQ;
-		if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol) < 0)
-			return -1;
+		if (dmi->support_resethaltreq) {
+			if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol | DMCONTROL_CRESETHALTREQ) < 0)
+				return -1;
+		}
 	}
+
+	// Now wait for the hart to halt
+	for (unsigned int i = 0; i < 512; i++) {
+		if (rvdbg_dmi_read(dmi, DMI_REG_DMSTATUS, &dmstatus) < 0)
+			return -1;
+		if (DMSTATUS_GET_ANYHAVERESET(dmstatus)) {
+			DEBUG("RISC-V: got reset, while trying to halt\n");
+			if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, dmcontrol | DMCONTROL_ACKHAVERESET) < 0)
+				return -1;
+		}
+		if (DMSTATUS_GET_ALLHALTED(dmstatus))
+			break;
+	}
+
+	if (!DMSTATUS_GET_ALLHALTED(dmstatus)) {
+		if (rvdbg_dmi_read(dmi, DMI_REG_DMSTATUS, &dmstatus) < 0)
+			return -1;
+
+		DEBUG("RISC-V: error, can not halt hart %d, dmstatus = 0x%08x -> giving up\n", 
+			dmi->current_hart, dmstatus);
+	}
+
+	return 0;
+}
+
+static int rvdbg_discover_hart(RVDBGv013_DMI_t *dmi)
+{
+	uint32_t hartinfo;
+	HART_t *hart = &dmi->harts[dmi->current_hart];
+
+	if (rvdbg_dmi_read(dmi, DMI_REG_HARTINFO, &hartinfo) < 0)
+		return -1;
+
+	hart->dataaddr = hartinfo & 0xfff;
+	hart->datasize = (hartinfo >> 12) & 0xf;
+	hart->dataaccess = (hartinfo >> 16) & 0x1;
+	hart->nscratch = (hartinfo >> 20) & 0xf;
 
 	return 0;
 }
@@ -303,7 +349,7 @@ static int rvdbg_discover_harts(RVDBGv013_DMI_t *dmi)
 	DEBUG("hartsellen = 0x%05x\n", hartsellen);
 	
 	// Iterate over all possible harts
-	for (hart_idx = 0; hart_idx < MIN(1U << hartsellen, RISCV_MAX_HARTS)
+	for (hart_idx = 0; hart_idx < MIN(hartsellen, RISCV_MAX_HARTS)
 			&& dmi->num_harts < ARRAY_NUMELEM(dmi->harts); hart_idx++) {
 		dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx);
         dmi->current_hart = hart_idx;
@@ -327,11 +373,8 @@ static int rvdbg_discover_harts(RVDBGv013_DMI_t *dmi)
 				return -1;
 		}
 
-		if (rvdbg_halt_hart(dmi, dmi->current_hart))
-            return -1;
-
-		// TODO: Add the hart
-		// dmi->harts[hart_idx].mhartid = ;
+		if (rvdbg_discover_hart(dmi) < 0)
+			return -1;
 
 		dmi->num_harts++;
 	}
@@ -564,14 +607,21 @@ static int rvdbg_read_regs(RVDBGv013_DMI_t *dmi, uint16_t reg_id, uint32_t *valu
 static int rvdbg_progbuf_upload(RVDBGv013_DMI_t *dmi, const uint32_t* buffer, uint8_t buffer_len)
 {
 	uint8_t i;
+	uint8_t total_avail_size = dmi->progbuf_size - (dmi->impebreak ? 0 : 1);
 
-	if (buffer_len > dmi->progbuf_size + dmi->impebreak ? 1 : 0) {
+	if (buffer_len > total_avail_size) {
 		DEBUG("RISC-V: progbuf upload size %d too big\n", buffer_len);
 		return -1;
 	}
 
 	for (i = DMI_REG_PROGRAMBUF_BEGIN; i < buffer_len; i++) {
 		if (rvdbg_dmi_write(dmi, DMI_REG_PROGRAMBUF_BEGIN + i, buffer[i]) < 0)
+			return -1;
+	}
+
+	// Add ebreak, if there is extra space.
+	if (i < total_avail_size) {
+		if (rvdbg_dmi_write(dmi, DMI_REG_PROGRAMBUF_BEGIN + i, RV32I_ISA_EBREAK) < 0)
 			return -1;
 	}
 
@@ -657,6 +707,7 @@ static int rvdbg_read_csr_progbuf(RVDBGv013_DMI_t *dmi, uint16_t reg_id, uint32_
 static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DMI_t *dmi)
 {
 	uint32_t abstractcs, abstractauto;
+	uint8_t total_avail_progbuf;
 	
 	if (rvdbg_dmi_read(dmi, DMI_REG_ABSTRACT_CS, &abstractcs) < 0)
 		return -1;
@@ -684,10 +735,13 @@ static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DMI_t *dmi)
 
 	// Check if a program buffer is supported, and it is sufficient for accessing
 	// CSR and / or MEMORY.
+	// At minimum one available instruction required for csr and mem access over
+	// progbuf.
 	// --------------------------------------------------------------------------
-	if (dmi->progbuf_size > 0) {
+	total_avail_progbuf = dmi->progbuf_size - (dmi->impebreak ? 0 : 1);
+	if (total_avail_progbuf >= 1) {
 		// PROGBUF supported
-		DEBUG("RISC-V: Program buffer with size %d supported.\n", dmi->progbuf_size);
+		DEBUG("RISC-V: Program buffer with available size %d supported.\n", total_avail_progbuf);
 
 		dmi->read_csr = rvdbg_read_csr_progbuf;
 		// dmi->write_csr = rvdbg_write_csr_progbuf;
@@ -716,11 +770,11 @@ static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DMI_t *dmi)
 	return 0;
 }
 
-
 int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
 {
 	uint8_t version;
 	uint32_t dmstatus, nextdmaddr, dmcontrol;
+	target *t;
 
     DEBUG("  debug version = %s\n  abits = %d\n idle = ",
 		rvdbg_version_tostr(dmi->debug_version), dmi->abits);
@@ -766,7 +820,7 @@ int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
 		// previous version active
 		// ----------------------------------------------------
 		if (version != (uint8_t)RISCV_DEBUG_VERSION_UNKNOWN)
-			rvdbg_set_debug_version(dmi, version);
+			rvdbg_set_debug_version(dmi, version - 1);
 	}
 
 	// TODO: Implement authentification plugins
@@ -781,6 +835,9 @@ int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
 	}
 
 	dmi->support_resethaltreq = DMSTATUS_GET_HASRESETHALTREQ(dmstatus);
+	if (dmi->support_resethaltreq) {
+		DEBUG("Supports set/clear-resethaltreq\n");
+	}
 
 	if (rvdbg_dmi_read(dmi, DMI_REG_NEXTDM_ADDR, &nextdmaddr) < 0)
 		return -1;
@@ -800,6 +857,15 @@ int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
     // Discover harts, add targets
 	if (rvdbg_discover_harts(dmi) < 0) 
 		return -1;
+
+
+	t = target_new();
+
+	rvdbg_dtm_ref(dmi);
+	t->priv = dmi;
+	t->priv_free = (void (*)(void *))rvdbg_dtm_unref;
+	t->driver = "Generic RVDBG 0.13";
+	t->core = dmi->descr;
 
 	return 0;
 }

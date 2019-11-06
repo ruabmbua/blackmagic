@@ -68,7 +68,7 @@ retry:
 		jtagtap_tms_seq(0, dmi->idle - (1 + 2));
 
 	switch (DMI_GET_OP(dmi_ret)) {
-		case DMISTAT_OP_INTERRUPTED:
+		case DMISTAT_OP_BUSY:
 			// Retry after idling, restore last dmi
 			rvdbg_dmi_reset_jtag(dmi, false);
 			jtag_dev_shift_dr(rvdbg_jtag->dev, (void*)&dmi_ret, (const void*)&rvdbg_jtag->last_dmi,
@@ -100,6 +100,12 @@ retry:
 	return 0;
 }
 
+static void rvdbg_dmi_free_jtag(RVDBGv013_DMI_t *dmi)
+{
+	RVDBGv013_JTAG_t *rvdbg_jtag = container_of(dmi, RVDBGv013_JTAG_t, dmi);
+	free(rvdbg_jtag);
+}
+
 void rvdbg013_jtag_dp_handler(jtag_dev_t *dev)
 {
 	uint64_t dtmcontrol;
@@ -113,8 +119,10 @@ void rvdbg013_jtag_dp_handler(jtag_dev_t *dev)
 
 	rvdbg_jtag->dev = dev;
 	rvdbg_jtag->dmi.idcode = dev->idcode;
+	rvdbg_jtag->dmi.descr = rvdbg_jtag->dev->descr;
 	rvdbg_jtag->dmi.rvdbg_dmi_low_access = rvdbg_dmi_low_access_jtag;
 	rvdbg_jtag->dmi.rvdbg_dmi_reset = rvdbg_dmi_reset_jtag;
+	rvdbg_jtag->dmi.rvdbg_dmi_free = rvdbg_dmi_free_jtag;
 
 	DEBUG("RISC-V DTM id 0x%x detected: `%s`\n"
 		"Scanning RISC-V target ...\n", rvdbg_jtag->dmi.idcode, rvdbg_jtag->dev->descr);
@@ -138,6 +146,4 @@ void rvdbg013_jtag_dp_handler(jtag_dev_t *dev)
 	if (rvdbg_dtm_init(&rvdbg_jtag->dmi) < 0) {
 		free(rvdbg_jtag);
 	}
-	// TODO: Replace later
-	else free(rvdbg_jtag);
 }

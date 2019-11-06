@@ -88,4 +88,8 @@
 #define RV32I_ISA_CSRRS(dst, csr, src) \
     RV_ISA_I_TYPE(csr, src, 0x2, dst, RV32I_ISA_OP_SYSTEM)
 
+// ebreak is used to jump from program buffer back to normal
+// debug mode.
+#define RV32I_ISA_EBREAK RV_ISA_S_TYPE(0x1, 0, 0, 0, RV32I_ISA_OP_SYSTEM)
+
 #endif /* __RV32I_ISA_H */
