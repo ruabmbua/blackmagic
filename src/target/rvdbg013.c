@@ -78,14 +78,6 @@ enum ABSTRACTCMD_TYPE {
 	ABSTRACTCMD_TYPE_ACCESS_MEMORY   = 0x2,
 };
 
-enum BUS_ACCESS {
-	BUS_ACCESS_8   = 0x0,
-	BUS_ACCESS_16  = 0x1,
-	BUS_ACCESS_32  = 0x2,
-	BUS_ACCESS_64  = 0x3,
-	BUS_ACCESS_128 = 0x4,
-};
-
 enum ABSTRACTCMD_ERR {
 	ABSTRACTCMD_ERR_NONE = 0x0,
 	ABSTRACTCMD_ERR_BUSY = 0x1,
@@ -682,7 +674,8 @@ static int rvdbg_progbuf_exec(RVDBGv013_DMI_t *dmi, uint32_t *args, uint8_t argi
 	return 0;
 }
 
-static int rvdbg_read_csr_progbuf(RVDBGv013_DMI_t *dmi, uint16_t reg_id, uint32_t* value) {
+static int rvdbg_read_csr_progbuf(RVDBGv013_DMI_t *dmi, uint16_t reg_id, uint32_t* value)
+{
 	// Store result in x1
 	uint32_t program[] = {
 		RV32I_ISA_CSRRS(1, reg_id, 0)
@@ -700,9 +693,56 @@ static int rvdbg_read_csr_progbuf(RVDBGv013_DMI_t *dmi, uint16_t reg_id, uint32_
 
 // static int rvdbg_write_csr_progbuf(RVDBGv013_DMI_t *dmi, uint16_t reg_id, uint32_t value) { }
 
-// static void rvdbg_read_mem_progbuf(RVDBGv013_DMI_t *dmi, uint32_t address, uint32_t* value) { }
+static int rvdbg_read_mem_progbuf(RVDBGv013_DMI_t *dmi, uint32_t address, uint32_t len, uint8_t* value)
+{
+	// Select optimal transfer size
+	enum BUS_ACCESS width;
+	uint32_t width_bytes;
+	uint32_t i;
+	uint32_t args[2];
 
-// static void rvdbg_write_mem_progbuf(RVDBGv013_DMI_t *dmi, uint32_t address, uint32_t value) { }
+	if (address % 4 == 0 && len > 4) {
+		width = BUS_ACCESS_32;
+		width_bytes = 4;
+	} else if (address % 2 == 0 && len > 2) {
+		width = BUS_ACCESS_16;
+		width_bytes = 2;
+	} else {
+		width = BUS_ACCESS_8;
+		width_bytes = 1;
+	}
+
+	// Load instruction with zero extend, x1 is target for data,
+	// x2 is load address.
+	uint32_t program[] = {
+		RV32I_ISA_LOAD(1, width, RV32I_ISA_LOAD_ZERO_EXTEND, 2, 0),
+	};
+
+	if (rvdbg_progbuf_upload(dmi, program, ARRAY_NUMELEM(program)) < 0)
+		return -1;
+
+	// Go over memory addresses in width steps, copy from x1
+	// result to value.
+	for (i = 0; i < len; i += width_bytes) {
+		// Set x2
+		args[1] = address + i;
+		if (rvdbg_progbuf_exec(dmi, args, 1, 2) < 0)
+			return -1;
+		memcpy(value + i, &args[0], width_bytes);
+	}
+
+	// If i is not exactly len some spare bytes are left,
+	// call function recursively with remainder.
+	if (i != len) {
+		i -= width_bytes;
+		return rvdbg_read_mem_progbuf(dmi, address + i, len - i, value + i);
+	}
+
+	return 0;
+}
+
+// static void rvdbg_write_mem_progbuf(RVDBGv013_DMI_t *dmi, uint32_t address, uint32_t len, const uint8_t *value); { }
+
 
 static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DMI_t *dmi)
 {
@@ -745,7 +785,7 @@ static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DMI_t *dmi)
 
 		dmi->read_csr = rvdbg_read_csr_progbuf;
 		// dmi->write_csr = rvdbg_write_csr_progbuf;
-		// dmi->read_mem = rvdbg_read_mem_progbuf;
+		dmi->read_mem = rvdbg_read_mem_progbuf;
 		// dmi->write_mem = rvdbg_write_mem_progbuf;
 	}
 

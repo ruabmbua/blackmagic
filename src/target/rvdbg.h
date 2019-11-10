@@ -87,8 +87,8 @@ typedef struct RVDBGv013_DMI_s {
 
     int (*read_csr)(struct RVDBGv013_DMI_s *dmi, uint16_t reg_id, uint32_t *value);
     int (*write_csr)(struct RVDBGv013_DMI_s *dmi, uint16_t reg_id, uint32_t value);
-    int (*read_mem)(struct RVDBGv013_DMI_s *dmi, uint32_t address, uint32_t *value);
-    int (*write_mem)(struct RVDBGv013_DMI_s *dmi, uint32_t address, uint32_t value);
+    int (*read_mem)(struct RVDBGv013_DMI_s *dmi, uint32_t address, uint32_t len, uint8_t *value);
+    int (*write_mem)(struct RVDBGv013_DMI_s *dmi, uint32_t address, uint32_t len, const uint8_t *value);
 } RVDBGv013_DMI_t;
 
 enum DTM_REGISTERS {
@@ -105,6 +105,14 @@ enum DMISTAT {
 	DMISTAT_RESERVED       = 1,
 	DMISTAT_OP_FAILED      = 2,
 	DMISTAT_OP_BUSY = 3,
+};
+
+enum BUS_ACCESS {
+	BUS_ACCESS_8   = 0x0,
+	BUS_ACCESS_16  = 0x1,
+	BUS_ACCESS_32  = 0x2,
+	BUS_ACCESS_64  = 0x3,
+	BUS_ACCESS_128 = 0x4,
 };
 
 int rvdbg_dtm_init(RVDBGv013_DMI_t *dtm);

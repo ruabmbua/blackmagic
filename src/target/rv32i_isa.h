@@ -36,7 +36,7 @@
 #define RV_ISA_I_TYPE(imm11_0, rs1, funct3, rd, opcode) (\
         (opcode & 0x3f) \
         | ((rd & 0x1f) << 7) \
-        | ((funct3 & 0x7) << 12) \
+        | (((funct3) & 0x7) << 12) \
         | ((rs1 & 0x1f) << 15) \
         | ((imm11_0 & 0x7ff) << 20) \
     )
@@ -80,7 +80,7 @@
 
 // Used for reading / writing memory
 #define RV32I_ISA_LOAD(rd, width, zextend, base, offset) \
-    RV_ISA_I_TYPE(offset, base, width | zextend, rd, RV32I_ISA_OP_LOAD)
+    RV_ISA_I_TYPE(offset, base, (width) | (zextend), rd, RV32I_ISA_OP_LOAD)
 #define RV32I_ISA_STORE(value, width, base, offset) \
     RV_ISA_S_TYPE(offset, value, base, width, RV32I_ISA_OP_STORE)
 
