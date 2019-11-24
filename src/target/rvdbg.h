@@ -76,6 +76,7 @@ typedef struct RVDBGv013_DMI_s {
     uint8_t abstract_data_count;
     bool support_autoexecdata;
     bool support_resethaltreq;
+    uint8_t hartsellen;
 
     HART_t harts[RVDBG_MAX_HARTS];
     uint8_t num_harts;

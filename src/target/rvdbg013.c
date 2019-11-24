@@ -158,7 +158,7 @@ enum HART_REG {
 	t &= ~(0xfff); \
 	t |= s & 0xfff; } while (0)
 
-#define RISCV_MAX_HARTS 32
+#define RISCV_MAX_HARTS 32U
 
 void rvdbg_dtm_ref(RVDBGv013_DMI_t *dtm)
 {
@@ -337,11 +337,17 @@ static int rvdbg_discover_harts(RVDBGv013_DMI_t *dmi)
 		return -1;
 
 	hartsellen = DMCONTROL_GET_HARTSEL(dmcontrol);
+	dmi->hartsellen = 0;
 
-	DEBUG("hartsellen = 0x%05x\n", hartsellen);
+	while (hartsellen & 0x1) {
+		dmi->hartsellen++;
+		hartsellen >>= 1;
+	}
+
+	DEBUG("hartsellen = %d\n", dmi->hartsellen);
 	
 	// Iterate over all possible harts
-	for (hart_idx = 0; hart_idx < MIN(hartsellen, RISCV_MAX_HARTS)
+	for (hart_idx = 0; hart_idx < MIN(1U << dmi->hartsellen, RISCV_MAX_HARTS)
 			&& dmi->num_harts < ARRAY_NUMELEM(dmi->harts); hart_idx++) {
 		dmcontrol = DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(hart_idx);
         dmi->current_hart = hart_idx;
@@ -810,6 +816,25 @@ static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DMI_t *dmi)
 	return 0;
 }
 
+static bool rvdbg_attach(target *t) {
+	RVDBGv013_DMI_t *dmi = t->priv;
+	
+	// TODO: Implement
+	return true;
+}
+
+static void rvdbg_detach(target *t) {
+	RVDBGv013_DMI_t *dmi = t->priv;
+
+}
+
+static bool rvdbg_check_error(target *t) {
+	RVDBGv013_DMI_t *dmi = t->priv;
+
+	// TODO: Implement
+	return false;
+}
+
 int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
 {
 	uint8_t version;
@@ -898,14 +923,22 @@ int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
 	if (rvdbg_discover_harts(dmi) < 0) 
 		return -1;
 
+	// Disable the debug module
+	if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, 0) < 0)
+		return -1;
 
 	t = target_new();
 
 	rvdbg_dtm_ref(dmi);
+
 	t->priv = dmi;
 	t->priv_free = (void (*)(void *))rvdbg_dtm_unref;
 	t->driver = "Generic RVDBG 0.13";
 	t->core = dmi->descr;
+
+	t->attach = rvdbg_attach;
+	t->detach = rvdbg_detach;
+	t->check_error = rvdbg_check_error;
 
 	return 0;
 }
