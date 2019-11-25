@@ -77,6 +77,7 @@ typedef struct RVDBGv013_DMI_s {
     bool support_autoexecdata;
     bool support_resethaltreq;
     uint8_t hartsellen;
+    bool error;
 
     HART_t harts[RVDBG_MAX_HARTS];
     uint8_t num_harts;
@@ -116,10 +117,10 @@ enum BUS_ACCESS {
 	BUS_ACCESS_128 = 0x4,
 };
 
-int rvdbg_dtm_init(RVDBGv013_DMI_t *dtm);
+int rvdbg_dmi_init(RVDBGv013_DMI_t *dtm);
 void rvdbg013_jtag_dp_handler(jtag_dev_t *dev);
-void rvdbg_dtm_ref(RVDBGv013_DMI_t *dtm);
-void rvdbg_dtm_unref(RVDBGv013_DMI_t *dtm);
+void rvdbg_dmi_ref(RVDBGv013_DMI_t *dtm);
+void rvdbg_dmi_unref(RVDBGv013_DMI_t *dtm);
 int rvdbg_set_debug_version(RVDBGv013_DMI_t *dp, uint8_t version);
 
 #endif /* __RVDBG_H */

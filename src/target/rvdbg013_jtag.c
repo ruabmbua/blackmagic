@@ -108,7 +108,7 @@ static void rvdbg_dmi_free_jtag(RVDBGv013_DMI_t *dmi)
 
 void rvdbg013_jtag_dp_handler(jtag_dev_t *dev)
 {
-	uint64_t dtmcontrol;
+	uint32_t dtmcontrol;
 	uint8_t version;
 
 	RVDBGv013_JTAG_t *rvdbg_jtag = calloc(1, sizeof(*rvdbg_jtag));
@@ -143,7 +143,7 @@ void rvdbg013_jtag_dp_handler(jtag_dev_t *dev)
 	rvdbg_jtag->dmi.idle = DTMCS_GET_IDLE(dtmcontrol);
 	rvdbg_jtag->dmi.abits = DTMCS_GET_ABITS(dtmcontrol);
 
-	if (rvdbg_dtm_init(&rvdbg_jtag->dmi) < 0) {
+	if (rvdbg_dmi_init(&rvdbg_jtag->dmi) < 0) {
 		free(rvdbg_jtag);
 	}
 }

@@ -160,12 +160,12 @@ enum HART_REG {
 
 #define RISCV_MAX_HARTS 32U
 
-void rvdbg_dtm_ref(RVDBGv013_DMI_t *dtm)
+void rvdbd_dmi_ref(RVDBGv013_DMI_t *dtm)
 {
     dtm->refcnt++;
 }
 
-void rvdbg_dtm_unref(RVDBGv013_DMI_t *dtm)
+void rvdbd_dmi_unref(RVDBGv013_DMI_t *dtm)
 {
     if (--dtm->refcnt == 0) {
         dtm->rvdbg_dmi_free(dtm);
@@ -224,7 +224,7 @@ static const char* rvdbg_version_tostr(enum RISCV_DEBUG_VERSION version)
 #endif /* ENABLE_DEBUG */
 
 // TODO: Remove
-__attribute_used__
+__attribute__((used))
 static int rvdbg_halt_current_hart(RVDBGv013_DMI_t *dmi)
 {
 	uint32_t dmstatus, dmcontrol;
@@ -819,6 +819,12 @@ static int rvdbg_select_mem_and_csr_access_impl(RVDBGv013_DMI_t *dmi)
 static bool rvdbg_attach(target *t) {
 	RVDBGv013_DMI_t *dmi = t->priv;
 	
+	// Activate the debug module
+	if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, DMCONTROL_DMACTIVE | DMCONTROL_MK_HARTSEL(dmi->current_hart)) < 0) {
+		dmi->error = true;
+		return false;
+	}
+
 	// TODO: Implement
 	return true;
 }
@@ -826,16 +832,18 @@ static bool rvdbg_attach(target *t) {
 static void rvdbg_detach(target *t) {
 	RVDBGv013_DMI_t *dmi = t->priv;
 
+	// Deactivate the debug module
+	if (rvdbg_dmi_write(dmi, DMI_REG_DMCONTROL, 0) < 0)
+		dmi->error = true;
 }
 
 static bool rvdbg_check_error(target *t) {
 	RVDBGv013_DMI_t *dmi = t->priv;
 
-	// TODO: Implement
-	return false;
+	return dmi->error;
 }
 
-int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
+int rvdbg_dmi_init(RVDBGv013_DMI_t *dmi)
 {
 	uint8_t version;
 	uint32_t dmstatus, nextdmaddr, dmcontrol;
@@ -843,6 +851,8 @@ int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
 
     DEBUG("  debug version = %s\n  abits = %d\n idle = ",
 		rvdbg_version_tostr(dmi->debug_version), dmi->abits);
+
+	dmi->error = false;
 
 	switch (dmi->idle) {
 		case 0:
@@ -929,10 +939,10 @@ int rvdbg_dtm_init(RVDBGv013_DMI_t *dmi)
 
 	t = target_new();
 
-	rvdbg_dtm_ref(dmi);
+	rvdbd_dmi_ref(dmi);
 
 	t->priv = dmi;
-	t->priv_free = (void (*)(void *))rvdbg_dtm_unref;
+	t->priv_free = (void (*)(void *))rvdbd_dmi_unref;
 	t->driver = "Generic RVDBG 0.13";
 	t->core = dmi->descr;
 
